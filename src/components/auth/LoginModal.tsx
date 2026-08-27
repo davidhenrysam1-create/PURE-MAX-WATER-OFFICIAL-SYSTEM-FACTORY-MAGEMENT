@@ -170,12 +170,14 @@ export const LoginModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[200] overflow-y-auto overflow-x-hidden bg-slate-950 flex flex-col justify-start sm:justify-center items-center py-4 sm:py-8 px-3 sm:px-6">
-      {/* Dynamic Background Image with High-Definition Visibility */}
-      <div className="fixed inset-0 pointer-events-none z-0">
+      {/* Full-bleed background image — dvh-based so it always fills the real
+          visible viewport (no dark gap when the mobile browser address bar
+          shows/hides), edge-to-edge with no dark overlay on top of it. */}
+      <div className="fixed inset-0 pointer-events-none z-0 w-[100dvw] h-[100dvh]">
         <img
           src={theme.loginBgUrl || 'https://images.unsplash.com/photo-1542013936693-884638332954?auto=format&fit=crop&w=1600&q=80'}
           alt="Pure Max Water Plant Backdrop"
-          className="w-[100vw] h-[100vh] object-cover object-center"
+          className="w-full h-full object-cover object-center"
           referrerPolicy="no-referrer"
         />
       </div>
