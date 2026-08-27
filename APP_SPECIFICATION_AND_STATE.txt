@@ -1,0 +1,176 @@
+================================================================================
+PURE MAX WATER FACTORY OS - SYSTEM ARCHITECTURE, SPECIFICATION & STATUS
+================================================================================
+Generated for: Pure Max Factory Operating System
+Location: Makeni, Sierra Leone (Coordinates: 8.8858° N, 12.0440° W)
+Currency: Sierra Leonean Leone (SLL / SLE / Le)
+Stack: React 18, TypeScript, Tailwind CSS, Express (Node.js backend), PostgreSQL (Drizzle ORM), Socket.io, Leaflet/Google Maps API, WebRTC Audio/Video.
+
+--------------------------------------------------------------------------------
+1. APPLICATION OVERVIEW & DOMAIN MODEL
+--------------------------------------------------------------------------------
+Pure Max Water Factory OS is an enterprise-grade industrial Enterprise Resource
+Planning (ERP) and Operations Management System tailored for packaged sachet
+water and bottled water production, distribution, fleet tracking, and financial
+accounting.
+
+Key Core Metrics & Calculation Logic:
+- Outer Film Packaging Yield: 1 Outer Film Set produces exactly 50 Water Bundles.
+  Formula: Total Bundles = (Outer Sets Purchased/Used * 50) - Remaining Loose Sachets.
+- Packaging Roll Tracking: Weight in Kilograms (KG). Tracks roll load onto machines,
+  depletion rate, and waste percentage.
+- Net Profit Formula: Gross Sales - (Operating Expenses + Raw Material Purchases + Repairs + Fuel).
+- Attendance & Daily Wage Matrix: Automated wage calculations based on role and
+  location tier (Factory Plant vs Field Distribution).
+
+--------------------------------------------------------------------------------
+2. ROLE-BASED ACCESS CONTROL (RBAC) MATRIX
+--------------------------------------------------------------------------------
+The system supports strict tiered roles with runtime UI enforcement & route guards:
+
+1. DEVELOPER (`developer`):
+   - Full unrestricted root access across all modules.
+   - Access to System Health, PostgreSQL Query Terminal (PgAdmin), Live Logs,
+     Reset DB / Purge Mock Data, Custom Theme Editor, Error Diagnostics.
+
+2. CEO / OWNER (`ceo`):
+   - Executive dashboard, full financials, gross & net profits, revenue analytics.
+   - Attendance reports, sales overview, production monitoring, audit logs.
+   - Restricted from developer low-level system settings.
+
+3. GENERAL MANAGER (`manager`):
+   - Operations oversight: Production logging, Sales verification, Expense approvals,
+     Attendance approvals, User role assignment, Fleet GPS tracking, Inventory control.
+
+4. ASSISTANT / SECOND MANAGER (`second_manager`):
+   - Operational delegate to Manager: Attendance approvals, Production logs,
+     Stock checks, Fleet monitoring, Sales recording.
+
+5. SALES PRODUCTION OFFICER / SALES MANAGER (`sales_manager`):
+   - Dedicated Daily Sales Module (SalesDailyRecordsModule) with detailed credit/cash tracking.
+   - Production bundle receipt verification, Customer debt collection, Sales summary reports.
+   - Restricted from engineering raw equipment logs and developer settings.
+
+6. PRODUCTION ENGINEER (`engineer`):
+   - Production batch entry, Machine maintenance logs, Outer film & Roll inventory intake,
+     Equipment inspection & water quality testing logs (TDS, pH, micron filters).
+   - Restricted from financial profit margins and user management.
+
+7. MACHINE OPERATOR (`operator`):
+   - Line-level machine status reporting (Running, Idle, Breakdown, Reloading roll).
+   - Bundle production counts, damaged bundle logging, roll reel change tracking.
+
+8. TRICYCLE DELIVERY STAFF (`tricycle_staff`):
+   - Field sales dispatch, mobile GPS broadcaster, customer cash collections,
+     individual daily sales submissions, personal attendance check-in.
+   - Hidden from global fleet map view (can broadcast own GPS location).
+
+9. VAN DELIVERY STAFF (`van_staff`):
+   - Bulk delivery routing, mobile GPS broadcaster, bulk wholesale sales receipts,
+     personal attendance check-in.
+
+10. GENERAL FACTORY STAFF (`staff`):
+    - Personal attendance check-in/check-out, team chat & announcements, profile.
+
+--------------------------------------------------------------------------------
+3. NAVIGATION & ROUTING ARCHITECTURE
+--------------------------------------------------------------------------------
+Primary Navigation (`src/components/common/Sidebar.tsx` & `App.tsx`):
+- `dashboard`: All roles (Role-adaptive widgets and action queues).
+- `fleet_map` / `map`: Developer, CEO, Manager, Second Manager, Sales Manager, Operator, Engineer.
+  * Hidden from field delivery staff (`tricycle_staff`, `van_staff`, `staff`).
+- `sales`: Developer, CEO, Manager, Second Manager.
+- `production`:
+  * Developer, CEO, Manager, Second Manager, Engineer -> Full Production & Raw Materials.
+  * Sales Manager -> Specialized Sales Daily Records & Distribution tracking.
+- `attendance`: All roles (Staff view own status; Managers view approval queues).
+- `expenses`: Developer, CEO, Manager, Second Manager.
+- `repairs`: Developer, CEO, Manager, Second Manager, Engineer.
+- `equipment`: Developer, CEO, Manager, Second Manager, Engineer.
+- `chat`: All authenticated team members (Real-time channels, Direct Messages, WebRTC calls).
+- `users`: Developer, Manager, Second Manager.
+- `reports`: Developer, CEO, Manager, Second Manager, Sales Manager.
+- `system`: Developer only.
+- `pgadmin`: Developer only.
+- `profile`: All authenticated users.
+
+--------------------------------------------------------------------------------
+4. MODULE BREAKDOWN & FEATURES
+--------------------------------------------------------------------------------
+
+A. DASHBOARD (`DashboardModule.tsx`):
+   - Real-time distinction between "TODAY'S SUMMARY (24-Hour Period)" and "LIFETIME METRICS (All-Time)".
+   - Daily Sales, Daily Expenses, Daily Net Profit, and Daily Production Bundles computed with strict current-day filters.
+   - Live Weather and Sierra Leone currency conversion widgets.
+   - Fast action shortcuts according to logged-in user role.
+
+B. PRODUCTION & RAW MATERIALS (`ProductionModule.tsx` & `MachineRollTracker.tsx`):
+   - Outer Film Tracking: Sets bought vs Sets used -> remaining loose bags calculation.
+   - Packaging Roll Tracking: Initial KG, current roll weight, net wastage.
+   - Machine Line Status: Real-time visual tracking of 4 production lines with assigned operators.
+   - Aggregated Recharts Bar Charts for Manager/Developer (Daily, Monthly, Yearly breakdowns).
+   - Production Quality Control: Damaged bundles counter and batch scrap rate.
+
+C. SALES & DAILY DISPATCH (`SalesModule.tsx` & `SalesDailyRecordsModule.tsx`):
+   - Cash vs Credit vs Orange Money / Afrimoney mobile payments.
+   - Debtors and credit management with payment reminder logging.
+   - Daily dispatch reconciliation for tricycle & van routes.
+   - Receipt generation and printable invoice summaries.
+
+D. FLEET GPS TRACKING (`FleetMapModule.tsx`):
+   - Dual-Engine Support: Google Maps Platform & OpenStreetMap Leaflet (with automatic failover).
+   - Live GPS broadcasting via HTML5 Geolocation API with Makeni bounds fallback.
+   - Real-time marker animations for tricycle and van delivery staff.
+   - Simulation mode with 1x, 2x, 4x speed multipliers for demonstrations.
+
+E. TEAM COLLABORATION & WEBRTC CALLING (`ChatModule.tsx` & `WebRTCCallModal.tsx`):
+   - Real-time Socket.io chat with Department channels and Direct 1-on-1 messaging.
+   - Voice note audio recorder and instant audio player.
+   - WebRTC Peer-to-Peer Audio & Video calling modal with ringtones and mute/camera controls.
+
+F. ATTENDANCE & PAYROLL (`AttendanceModule.tsx`):
+   - Geolocation-verified check-in / check-out.
+   - Manager approval workflow for unverified check-ins.
+   - Automated daily and monthly salary calculation based on attendance points.
+
+G. EXPENSES & MAINTENANCE (`ExpensesModule.tsx` & `RepairsModule.tsx`):
+   - Expense categorization (Generator Fuel, Vehicle Maintenance, Staff Meals, Factory Utilities).
+   - Machine spare parts replacement log and maintenance scheduling.
+
+H. DEVELOPER PORTAL & PGADMIN (`SystemHealthModule.tsx` & `PgAdminQueriesModule.tsx`):
+   - Live database health, table row counters, and latency monitoring.
+   - Interactive SQL query runner with schema inspector for PostgreSQL.
+   - "Danger Zone": Purge demo data (`DELETE /api/sales/mock`), restore database seed, and change theme presets.
+
+--------------------------------------------------------------------------------
+5. PREVIOUS CORRECTIONS & ARCHITECTURAL DECISIONS
+--------------------------------------------------------------------------------
+1. RBAC GPS Map Access:
+   - Secured route guard in `App.tsx` so `tricycle_staff` and `van_staff` cannot view other vehicles' positions globally, while retaining background GPS broadcasting.
+2. 24-Hour vs All-Time Dashboard Metrics:
+   - Fixed bug where all-time sales were displayed under today's summary. Created distinct date filtering logic for current 24-hour transactions.
+3. Mock Sales Purge Endpoint:
+   - Created `DELETE /api/sales/mock` on the Express server and connected it with a double-confirmation modal in the Developer portal to easily flush demo data.
+4. Z-Index Layering Standardization:
+   - Fixed modal overlays colliding with sticky headers:
+     * Header & Sidebar: `z-50`
+     * Normal Modals & Dialogs: `z-[200]`
+     * WebRTC Active Calls & Global Notifications: `z-[400]`
+5. Dual Light/Dark Theme Contrast:
+   - Added `text-slate-900 dark:text-white` across Production, Attendance, and Roll tracker modules to ensure crisp readability in both bright sunlight and dark factory environments.
+
+--------------------------------------------------------------------------------
+6. PENDING TASKS, KNOWN BUGS & NEXT ENHANCEMENTS
+--------------------------------------------------------------------------------
+1. Production Batch Roll-Deduction Automation:
+   - Currently, operators manually input remaining roll weight. Needs automatic decrement formula based on bundles produced (e.g. ~1.2kg per 50 bundles).
+2. Offline ServiceWorker Cache & Sync:
+   - For delivery staff operating in low-connectivity areas around Makeni, queue offline sales records into IndexedDB and flush via Background Sync on reconnection.
+3. Automated WhatsApp/SMS Invoice Dispatch:
+   - Allow customer invoice sharing directly through WhatsApp Web / SMS API on payment completion.
+4. Export Master Backup Enhancements:
+   - Ensure Multi-Sheet Excel export covers newly added machine maintenance history and water test logs.
+
+================================================================================
+END OF SPECIFICATION FILE
+================================================================================

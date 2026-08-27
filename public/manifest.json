@@ -1,0 +1,24 @@
+{
+  "name": "Pure Max Purified Mineral Water Factory OS",
+  "short_name": "Pure Max",
+  "description": "Industrial Purified Mineral Water Factory Management System for Sierra Leone (Makeni & Freetown operations)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

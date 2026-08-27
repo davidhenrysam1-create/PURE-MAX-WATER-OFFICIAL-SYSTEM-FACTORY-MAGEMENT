@@ -1,0 +1,120 @@
+/**
+ * Real-Time Logged-In Delivery Staff Map Module
+ * Displays ONLY active logged-in Tricycle Staff & Van Staff on authentic real-world maps.
+ * No mock factory landmarks, no preset static pins, no fake routes.
+ * Supports HTML5 Real Device GPS Geolocation (navigator.geolocation).
+ */
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import L from 'leaflet';
+import { useApp } from '../../context/AppContext';
+import { StaffLiveLocation } from '../../types';
+import {
+  MapPin,
+  Truck,
+  Navigation,
+  Phone,
+  MessageSquare,
+  Search,
+  CheckCircle2,
+  Gauge,
+  Radio,
+  Layers,
+  Shield,
+  Activity,
+  Maximize2,
+  Minimize2,
+  Satellite,
+  Globe,
+  Crosshair,
+  UserCheck,
+  AlertCircle,
+  RefreshCw,
+  LocateFixed,
+  Zap,
+  Copy,
+  Check,
+} from 'lucide-react';
+
+export type MapTileMode = 'satellite' | 'street' | 'dark';
+
+export const FleetMapModule: React.FC = () => {
+  const {
+    currentUser,
+    users,
+    activeRole,
+    staffLiveLocations,
+    updateStaffLiveLocation,
+    setActiveTab,
+  } = useApp();
+
+  const isDeliveryStaff = currentUser?.role === 'tricycle_staff' || currentUser?.role === 'van_staff';
+  const isManagerOrAdmin = ['developer', 'ceo', 'manager', 'second_manager', 'sales_manager'].includes(activeRole);
+  const isRegularStaff = activeRole === 'staff';
+
+  const [mapMode, setMapMode] = useState<MapTileMode>('satellite');
+  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterRole, setFilterRole] = useState<'all' | 'tricycle_staff' | 'van_staff'>('all');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isLocatingMe, setIsLocatingMe] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [locationSuccessMsg, setLocationSuccessMsg] = useState<string | null>(null);
+  const [copiedPhoneId, setCopiedPhoneId] = useState<string | null>(null);
+
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const markersRef = useRef<{ [key: string]: L.Marker }>({});
+
+  // Registered Tricycle and Van Staff from user accounts
+  const deliveryStaffUsers = useMemo(() => {
+    return users.filter((u) => u.role === 'tricycle_staff' || u.role === 'van_staff');
+  }, [users]);
+
+  // Merge registered delivery staff with any active live GPS locations
+  const activeDeliveryStaff = useMemo(() => {
+    return deliveryStaffUsers
+      .map((user) => {
+        const liveLoc = staffLiveLocations.find((loc) => loc.userId === user.id);
+        const isCurrentLoggedIn = currentUser?.id === user.id;
+
+        return {
+          userId: user.id,
+          employeeId: user.employeeId,
+          userName: user.name,
+          userRole: user.role as 'tricycle_staff' | 'van_staff',
+          avatarUrl: user.avatarUrl,
+          phone: user.phone,
+          isCurrentLoggedIn,
+          hasGps: !!liveLoc,
+          lat: liveLoc?.lat ?? null,
+          lng: liveLoc?.lng ?? null,
+          accuracyMeters: liveLoc?.accuracyMeters ?? null,
+          speedKmH: liveLoc?.speedKmH ?? 0,
+          batteryPct: liveLoc?.batteryPct ?? 90,
+          status: liveLoc?.status ?? (isCurrentLoggedIn ? 'Online (Waiting for GPS)' : 'Offline / Standby'),
+          lastUpdated: liveLoc?.lastUpdated ?? (isCurrentLoggedIn ? 'Logged In Now' : 'Not Broadcasted'),
+          isLiveDeviceGps: liveLoc?.isLiveDeviceGps ?? false,
+        };
+      })
+      .filter((staff) => {
+        if (filterRole === 'all') return true;
+        return staff.userRole === filterRole;
+      })
+      .filter((staff) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return (
+          staff.userName.toLowerCase().includes(q) ||
+          staff.employeeId.toLowerCase().includes(q) ||
+          staff.phone.includes(q)
+        );
+      });
+  }, [deliveryStaffUsers, staffLiveLocations, currentUser, filterRole, searchQuery]);
+
+  // Filter only those with active GPS coordinates for the map
+  const staffWithLocations = useMemo(() => {
+    return activeDeliveryStaff.filter((s) => s.lat !== null && s.lng !== null) as Array<
+      (typeof activeDeliveryStaff)[0] & { lat: number; lng: number }
+    >;

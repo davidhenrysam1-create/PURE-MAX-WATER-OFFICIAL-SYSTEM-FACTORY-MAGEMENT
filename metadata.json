@@ -1,0 +1,6 @@
+{
+  "name": "Pure Max Factory Management System",
+  "description": "Purified Mineral Water Factory Management System with role-based dashboards, sales tracking, attendance & salaries in Leones, production tracking, real-time messaging & announcements, expenses, equipment logs, and system health.",
+  "requestFramePermissions": ["microphone", "camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
