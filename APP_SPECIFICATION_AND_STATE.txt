@@ -158,6 +158,9 @@ H. DEVELOPER PORTAL & PGADMIN (`SystemHealthModule.tsx` & `PgAdminQueriesModule.
      * WebRTC Active Calls & Global Notifications: `z-[400]`
 5. Dual Light/Dark Theme Contrast:
    - Added `text-slate-900 dark:text-white` across Production, Attendance, and Roll tracker modules to ensure crisp readability in both bright sunlight and dark factory environments.
+6. GitHub Pages & CI/CD Deployment Workflow:
+   - Configured dynamic base URL in `vite.config.ts` (`/PURE-MAX-WATER-OFFICIAL-SYSTEM/` in GitHub Actions vs `./` in local/preview).
+   - Created `.github/workflows/deploy.yml` with automated push-to-main trigger, Node 20 build, artifact upload, and GitHub Pages deployment.
 
 --------------------------------------------------------------------------------
 6. PENDING TASKS, KNOWN BUGS & NEXT ENHANCEMENTS
