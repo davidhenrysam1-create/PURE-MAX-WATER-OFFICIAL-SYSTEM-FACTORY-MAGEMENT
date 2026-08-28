@@ -57,6 +57,35 @@ export const LoginModal: React.FC = () => {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMsg, setResetMsg] = useState('');
   const [resetSuccess, setResetSuccess] = useState(false);
+  /**
+   * Offline recovery code (Issue #2).
+   *
+   * On a static deploy (GitHub Pages) there is no Express backend, so
+   * POST /api/auth/request-reset returns the 404 HTML page. `res.json()` then
+   * throws and the user saw "Network error connecting to verification engine"
+   * with no way to recover a forgotten password at all.
+   *
+   * When the server path is unavailable we fall back to a device-local code.
+   * This is NOT a security regression: the full account list already lives in
+   * this browser's localStorage, so anyone able to reach the fallback can
+   * already read every credential. The code is single-use, scoped to the
+   * account, expires in 15 minutes, and is clearly labelled as offline-only.
+   */
+  const [offlineOtpCode, setOfflineOtpCode] = useState<string | null>(null);
+
+  const OFFLINE_RESET_KEY = 'puremax_offline_reset';
+  const OFFLINE_RESET_TTL_MS = 15 * 60 * 1000;
+
+  const findAccountByIdentifier = (identifier: string) => {
+    const trimmed = identifier.trim().toLowerCase();
+    const digits = identifier.replace(/\D/g, '');
+    return users.find((u) => {
+      if (u.email?.toLowerCase() === trimmed) return true;
+      if (u.employeeId?.toLowerCase() === trimmed) return true;
+      const phoneDigits = (u.phone || '').replace(/\D/g, '');
+      return digits.length >= 6 && phoneDigits.length > 0 && phoneDigits.endsWith(digits);
+    });
+  };
 
   const handleStandardLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,6 +119,9 @@ export const LoginModal: React.FC = () => {
     }
     setResetLoading(true);
     setResetMsg('');
+    setOfflineOtpCode(null);
+
+    // 1. Preferred path: the verification server (Google AI Studio / any Node host).
     try {
       const res = await fetch('/api/auth/request-reset', {
         method: 'POST',
@@ -99,19 +131,70 @@ export const LoginModal: React.FC = () => {
           channel: resetChannel,
         }),
       });
-      const data = await res.json();
-      setResetLoading(false);
-      if (res.ok && data.success) {
+
+      // A static host answers with an HTML 404 page, so `res.json()` throws.
+      // Treat that as "no backend" rather than a hard failure.
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      if (res.ok && data?.success) {
+        setResetLoading(false);
         setResetOtpSent(true);
         setResetMsg(data.message);
-      } else {
+        return;
+      }
+
+      // A real backend answered and genuinely rejected the account — do not
+      // silently bypass that with the offline fallback.
+      if (data && typeof data === 'object' && data.error) {
+        setResetLoading(false);
         setResetOtpSent(false);
         setResetMsg(data.error || 'Account verification failed. Please check your credentials.');
+        return;
       }
-    } catch (err: any) {
-      setResetLoading(false);
-      setResetMsg('Network error connecting to verification engine. Please try again.');
+    } catch {
+      // No reachable backend — fall through to the offline flow.
     }
+
+    // 2. Offline fallback: device-local recovery code.
+    setResetLoading(false);
+
+    const account = findAccountByIdentifier(resetAccountInput);
+    if (!account) {
+      setResetOtpSent(false);
+      setResetMsg(
+        'No account found for that Email, Employee ID or phone number. Check the details or contact your Manager.'
+      );
+      return;
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    try {
+      localStorage.setItem(
+        OFFLINE_RESET_KEY,
+        JSON.stringify({
+          identifier: resetAccountInput.trim().toLowerCase(),
+          userId: account.id,
+          code,
+          expiresAt: Date.now() + OFFLINE_RESET_TTL_MS,
+          used: false,
+        })
+      );
+    } catch {
+      // Storage unavailable — continue anyway; the code is shown on screen.
+    }
+
+    setOfflineOtpCode(code);
+    setResetOtpSent(true);
+    setResetMsg(
+      resetChannel === 'phone'
+        ? 'Offline recovery mode: no verification server is reachable, so no WhatsApp/SMS message could be sent. Use the single-use code shown below — it expires in 15 minutes.'
+        : 'Offline recovery mode: no email server is reachable, so no message could be sent. Use the single-use code shown below — it expires in 15 minutes.'
+    );
   };
 
   const handleConfirmResetPassword = async (e: React.FormEvent) => {
@@ -137,17 +220,65 @@ export const LoginModal: React.FC = () => {
           newPassword: resetNewPassword,
         }),
       });
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
       setResetLoading(false);
-      if (res.ok && data.success) {
+      if (res.ok && data?.success) {
         setResetSuccess(true);
         setCredential(resetAccountInput.trim());
         setPassword(resetNewPassword);
         setResetMsg(data.message || 'Password updated successfully! You can now log in.');
         resetPasswordWithOtp(resetAccountInput.trim(), resetOtpCode.trim(), resetNewPassword);
-      } else {
-        setResetMsg(data.error || 'Invalid or expired verification code.');
+        return;
       }
+
+      if (data && typeof data === 'object' && data.error) {
+        setResetMsg(data.error || 'Invalid or expired verification code.');
+        return;
+      }
+
+      // No usable backend — verify against the locally issued recovery code.
+      let stored: any = null;
+      try {
+        stored = JSON.parse(localStorage.getItem(OFFLINE_RESET_KEY) || 'null');
+      } catch {
+        stored = null;
+      }
+
+      const submitted = resetOtpCode.trim();
+      const matches =
+        stored &&
+        !stored.used &&
+        stored.code === submitted &&
+        stored.identifier === resetAccountInput.trim().toLowerCase() &&
+        Date.now() < stored.expiresAt;
+
+      if (!matches) {
+        setResetMsg(
+          stored && Date.now() >= stored.expiresAt
+            ? 'That recovery code has expired. Request a new one.'
+            : 'Invalid or expired verification code.'
+        );
+        return;
+      }
+
+      // Single use.
+      try {
+        localStorage.setItem(OFFLINE_RESET_KEY, JSON.stringify({ ...stored, used: true }));
+      } catch {
+        /* ignore */
+      }
+
+      resetPasswordWithOtp(resetAccountInput.trim(), submitted, resetNewPassword);
+      setOfflineOtpCode(null);
+      setResetSuccess(true);
+      setCredential(resetAccountInput.trim());
+      setPassword(resetNewPassword);
+      setResetMsg('Password updated successfully! You can now log in with your new password.');
     } catch (err: any) {
       setResetLoading(false);
       setResetMsg('Network error verifying code. Please try again.');
@@ -570,6 +701,27 @@ export const LoginModal: React.FC = () => {
                         required
                       />
                     </div>
+
+                    {/* Offline recovery code — only rendered when no verification
+                        server was reachable, so the user is never left with a
+                        dead-end "Network error" message. */}
+                    {offlineOtpCode && (
+                      <div className="p-4 rounded-xl bg-amber-950/60 border-2 border-amber-500/70 text-center space-y-1.5">
+                        <div className="flex items-center justify-center gap-1.5 text-amber-300">
+                          <AlertCircle className="w-4 h-4" />
+                          <span className="text-[10px] font-black uppercase tracking-widest">
+                            Offline Recovery Mode — No Email/WhatsApp Server
+                          </span>
+                        </div>
+                        <div className="text-3xl font-black font-mono tracking-[0.3em] text-white">
+                          {offlineOtpCode}
+                        </div>
+                        <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                          No verification server is reachable, so this code could not be emailed or messaged.
+                          Enter it above. It is single-use and expires in 15 minutes.
+                        </p>
+                      </div>
+                    )}
 
                     <div>
                       <label className="block font-semibold text-slate-300 mb-1">Enter New Permanent Password</label>
