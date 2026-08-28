@@ -463,6 +463,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [theme]);
 
+  // Mirror the active dark/light mode onto <html>.
+  // App.tsx only puts the `dark` class on #app-main-layout, but overlays that
+  // render through a React portal (Share modal, WebRTC call UI, toasts) live
+  // under <body> instead, and would otherwise miss every `dark:` style.
+  // Because index.css declares `@custom-variant dark (&:where(.dark, .dark *))`,
+  // toggling the class on <html> makes the whole document — portals included —
+  // follow the in-app theme rather than the OS preference.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const isDark = theme.darkMode ?? true;
+    root.classList.toggle('dark', isDark);
+    root.style.colorScheme = isDark ? 'dark' : 'light';
+  }, [theme.darkMode]);
+
   // Real-Time GPS Tracking for Logged-In Tricycle Staff & Van Staff Only
   const [staffLiveLocations, setStaffLiveLocations] = useState<StaffLiveLocation[]>(() => {
     const saved = localStorage.getItem('puremax_staff_live_locations');

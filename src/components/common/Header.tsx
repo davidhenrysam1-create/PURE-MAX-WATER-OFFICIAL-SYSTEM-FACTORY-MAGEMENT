@@ -5,6 +5,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ShareAppModal } from './ShareAppModal';
+import { Portal } from './Portal';
 import {
   Droplets,
   Bell,
@@ -176,9 +177,22 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu, isMobileMenu
   };
 
   return (
-    <header className="sticky top-0 z-50 w-full max-w-full bg-slate-900/80 backdrop-blur-md border-b border-white/10 shadow-md transition-colors duration-200 overflow-x-hidden relative">
+    /* ---------------------------------------------------------------------
+     * z-index: 50 (top navigation) — see the layering contract in index.css.
+     *
+     * CLIPPING FIX: this header previously carried `overflow-x-hidden` (and its
+     * inner bar `overflow-hidden`) to crop the full-bleed banner image. That
+     * clipped every overflowing child — the notifications panel, the colour
+     * picker and the mobile "more" menu all lost everything below the header's
+     * bottom edge. The banner <div> below already has its own `overflow-hidden`,
+     * so removing the clipping here is safe and lets the dropdowns breathe.
+     * ------------------------------------------------------------------- */
+    <header
+      id="app-top-navigation"
+      className="sticky top-0 z-50 w-full max-w-full bg-slate-900/80 backdrop-blur-md border-b border-white/10 shadow-md transition-colors duration-200 relative"
+    >
       {/* Main Bar */}
-      <div className="relative max-w-7xl w-full max-w-full mx-auto px-3 sm:px-5 md:px-6 lg:px-8 pr-4 sm:pr-6 md:pr-8 h-14 sm:h-16 flex items-center justify-between gap-2 overflow-hidden">
+      <div className="relative max-w-7xl w-full max-w-full mx-auto px-3 sm:px-5 md:px-6 lg:px-8 pr-4 sm:pr-6 md:pr-8 h-14 sm:h-16 flex items-center justify-between gap-2">
         {/* Banner Backdrop Picture */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
           <img
@@ -622,8 +636,14 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu, isMobileMenu
         </div>
       </div>
 
-      {/* Share App Modal Component */}
-      <ShareAppModal isOpen={isShareModalOpen} onClose={closeShareModal} />
+      {/* Share App Modal Component
+          Rendered through a portal into <body> on purpose: the header's
+          `backdrop-blur-md` makes it a containing block for `position: fixed`
+          children, which trapped this dialog inside the 4rem-tall header box
+          and made it look clipped / hidden behind the top navigation. */}
+      <Portal>
+        <ShareAppModal isOpen={isShareModalOpen} onClose={closeShareModal} />
+      </Portal>
     </header>
   );
 };

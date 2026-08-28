@@ -1,8 +1,37 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+ * CLASS-BOUND DARK MODE (Tailwind v4)
+ * ---------------------------------------------------------------------------
+ * ROOT CAUSE OF A LONG-STANDING THEME BUG:
+ * In Tailwind v4 the `dark:` variant is compiled against `prefers-color-scheme`
+ * by DEFAULT. It does NOT look for a `.dark` class unless you declare it.
+ * This app toggles light/dark from an in-app control (App.tsx applies / removes
+ * the `dark` class on the layout root), so without the declaration below every
+ * `dark:bg-slate-900` / `dark:text-white` in the codebase was following the
+ * OPERATING SYSTEM setting instead of the user's in-app choice. Result:
+ * switching to "Crisp Light Mode" left the UI visually dark (or vice-versa)
+ * whenever the OS theme disagreed — which read as a "theme switching crash".
+ *
+ * Declaring the variant here makes `dark:` track the `.dark` class instead.
+ * The class is applied to BOTH <html> and #app-main-layout (see AppContext),
+ * so portalled overlays (modals / call UI) rendered into <body> also resolve
+ * their `dark:` styles correctly.
+ * ------------------------------------------------------------------------- */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
+    color-scheme: light dark;
+  }
+
+  /* Keep native form controls / scrollbars in step with the active theme. */
+  html.dark {
     color-scheme: dark;
+  }
+
+  html:not(.dark) {
+    color-scheme: light;
   }
 
   html, body {
@@ -40,6 +69,20 @@
     font-size: 16px !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Z-INDEX LAYERING CONTRACT  (Issue #6)
+ * ---------------------------------------------------------------------------
+ * Sticky header + mobile bottom nav :  z-50
+ * Dropdowns inside the header       :  z-[100]   (scoped to header's stacking ctx)
+ * Standard modals / dialogs         :  z-[200]   (Share App, forms, drawers)
+ * Global toasts                     :  z-[300]
+ * Active WebRTC call overlay        :  z-[400]   (must sit above everything)
+ *
+ * Portals are used for anything that must escape an ancestor's
+ * `backdrop-filter` containing block or `overflow` clipping — see
+ * src/components/common/Portal.tsx.
+ * ------------------------------------------------------------------------- */
 
 /* Custom sleek scrollbar */
 ::-webkit-scrollbar {
@@ -179,30 +222,67 @@
   --border-color: rgba(15, 23, 42, 0.15);
 }
 
-/* Dynamic CSS Color overrides for high contrast slate-based texts inside #app-main-layout */
+/* ---------------------------------------------------------------------------
+ * HIGH-CONTRAST TEXT RESOLUTION INSIDE #app-main-layout
+ * ---------------------------------------------------------------------------
+ * PREVIOUS BEHAVIOUR (bug):
+ *   The old rule bundled `.text-white` (and every `.dark:text-*` variant) into
+ *   the same `!important` override as `.text-slate-900`, forcing ALL of them to
+ *   `var(--text-primary)`. In Light Mode `--text-primary` is a near-black
+ *   (#0f172a), so any element an author had deliberately marked `text-white`
+ *   because it sits on a DARK surface (welcome banner, engineer card, sales
+ *   officer card, water-quality monitor, inspection banner, dark modal headers)
+ *   rendered as near-black text on a near-black background — the "faded /
+ *   invisible text on light cards" symptom reported for Light Mode.
+ *
+ * NEW BEHAVIOUR:
+ *   1. Only the ambiguous "slate" text utilities are remapped. They are the
+ *      ones used on light surfaces, and they now resolve to the theme's
+ *      primary text colour: dark ink in Light Mode, white in Dark Mode.
+ *   2. `.text-white` is left ALONE — white means white, on every surface.
+ *   3. `.dark:*` variants are left ALONE. Now that the `dark:` variant is
+ *      class-bound (see @custom-variant above), they resolve natively and
+ *      correctly, so overriding them would only fight Tailwind.
+ *
+ * Net effect: "text-slate-900 dark:text-white" cards (Attendance Approval
+ * Queue, every modal, every table) render dark ink on white in Light Mode and
+ * white on slate in Dark Mode, with no manual overrides required.
+ * ------------------------------------------------------------------------- */
 #app-main-layout .text-slate-900,
 #app-main-layout .text-slate-800,
 #app-main-layout .text-slate-700,
-#app-main-layout .text-slate-600,
-#app-main-layout .text-white,
-#app-main-layout .dark\:text-white,
-#app-main-layout .dark\:text-slate-100,
-#app-main-layout .dark\:text-slate-200,
-#app-main-layout .dark\:text-slate-300 {
+#app-main-layout .text-slate-600 {
   color: var(--text-primary) !important;
 }
 
 #app-main-layout .text-slate-500,
-#app-main-layout .text-slate-400,
-#app-main-layout .dark\:text-slate-400,
-#app-main-layout .dark\:text-slate-500 {
+#app-main-layout .text-slate-400 {
   color: var(--text-secondary) !important;
 }
 
-/* Apply full glassmorphism to internal app layout ONLY (excluding Login Modal) */
-#app-main-layout .bg-white,
-#app-main-layout .dark\:bg-slate-900,
-#app-main-layout .dark\:bg-slate-800,
+/* Secondary text must also survive on the light glass surface. */
+#app-main-layout:not(.dark) .text-slate-400,
+#app-main-layout:not(.dark) .text-slate-500 {
+  color: #475569 !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Apply full glassmorphism to internal app layout ONLY (excluding Login Modal)
+ * ---------------------------------------------------------------------------
+ * PERFORMANCE FIX: the original selector matched every `.bg-white`, and several
+ * tables (notably AttendanceMatrix) use `bg-white dark:bg-slate-900` on
+ * individual <td> cells. That slapped a `backdrop-filter: blur(16px)` onto
+ * hundreds of table cells at once. Each backdrop-filter forces its own
+ * compositing layer, so a single attendance grid could ask the GPU for
+ * hundreds of offscreen buffers — the classic cause of the Android/Chrome
+ * raster OOM and the "Pure Max Factory OS Recovery" crash screen.
+ *
+ * Table cells and inline text elements are now excluded, so the blur is only
+ * applied to genuine card/panel surfaces.
+ * ------------------------------------------------------------------------- */
+#app-main-layout .bg-white:not(td):not(th):not(tr):not(span):not(code):not(small):not(a):not(button):not(input):not(select):not(textarea):not(li),
+#app-main-layout .dark\:bg-slate-900:not(td):not(th):not(tr):not(span):not(code):not(small):not(a):not(button):not(li),
+#app-main-layout .dark\:bg-slate-800:not(td):not(th):not(tr):not(span):not(code):not(small):not(a):not(button):not(li),
 #app-main-layout .bg-\[\#111b21\],
 #app-main-layout .bg-\[\#0b141a\],
 #app-main-layout .bg-\[\#020617\],
@@ -211,10 +291,30 @@
 #app-main-layout .glass-modal,
 #app-main-layout .sleek-card {
   background-color: var(--glass-bg) !important;
-  backdrop-filter: blur(16px) !important;
-  -webkit-backdrop-filter: blur(16px) !important;
   border-color: var(--glass-border) !important;
   box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Blur is opt-in per surface, never blanket-applied to table cells. */
+#app-main-layout .glass-panel,
+#app-main-layout .glass-card,
+#app-main-layout .glass-modal,
+#app-main-layout .sleek-card {
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+}
+
+/* On phones, drop the blur entirely — the media query below already neutralises
+   Tailwind's backdrop-blur utilities, and this keeps the glass surfaces from
+   reintroducing it through the rules above. */
+@media (max-width: 768px) {
+  #app-main-layout .glass-panel,
+  #app-main-layout .glass-card,
+  #app-main-layout .glass-modal,
+  #app-main-layout .sleek-card {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }
 
 /* Hardware-Safe Card styling (immune to mobile GPU VRAM raster glitches) */
