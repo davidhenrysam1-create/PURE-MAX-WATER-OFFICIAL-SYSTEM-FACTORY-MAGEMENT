@@ -94,6 +94,7 @@ export const SystemHealthModule: React.FC = () => {
     isSyncing,
     triggerManualSync,
     exportExcelBackup,
+    purgeDemoData,
   } = useApp();
 
   // Active developer tab: 'telemetry' | 'color_theme' | 'media_branding'
@@ -880,26 +881,30 @@ export const SystemHealthModule: React.FC = () => {
             </h3>
             <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-900/40 flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-bold text-rose-300">Purge Demo/Mock Sales Data</h4>
+                <h4 className="text-sm font-bold text-rose-300">Purge Demo/Mock Data</h4>
                 <p className="text-xs text-rose-400/80 mt-1">
-                  Permanently deletes all mock records from PostgreSQL and local storage, ensuring only real transactions appear.
+                  Removes only records that cannot be attributed to a real, active staff account (demo/seed rows).
+                  Real transactions, reports and Excel backups are preserved.
                 </p>
               </div>
-              <button 
-                onClick={async () => {
-                  if(window.confirm('Are you absolutely sure? This will wipe all current sales records from the database to clear demo data.')) {
-                    try {
-                      const res = await fetch('/api/sales/mock', { method: 'DELETE' });
-                      if (!res.ok) throw new Error('Failed to purge on server');
-                      localStorage.removeItem('puremax_sales_v3');
-                      alert('Demo data purged successfully!');
-                      window.location.reload();
-                    } catch (e) {
-                      alert('Error purging data');
-                    }
-                  }
+              <button
+                onClick={() => {
+                  // Two-step confirmation, and it now runs the safe LOCAL purge
+                  // (AppContext.purgeDemoData) first. Previously this button hit
+                  // DELETE /api/sales/mock, which truncated the whole sales table,
+                  // and it hard-failed on a static GitHub Pages deploy where no
+                  // backend exists.
+                  const ok = window.confirm(
+                    'Purge demo/mock data?\n\nThis removes seeded and unattributable records only. Real transactions are preserved.'
+                  );
+                  if (!ok) return;
+                  const ok2 = window.confirm(
+                    'Confirm: proceed with the demo data purge?'
+                  );
+                  if (!ok2) return;
+                  purgeDemoData();
                 }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition cursor-pointer"
               >
                 Purge Demo Data
               </button>

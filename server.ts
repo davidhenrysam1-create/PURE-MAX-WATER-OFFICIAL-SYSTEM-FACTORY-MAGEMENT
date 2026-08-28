@@ -26,7 +26,7 @@ import {
   equipmentLogs,
   systemSettings,
 } from './src/db/schema.ts';
-import { eq, desc, sql, and, gte } from 'drizzle-orm';
+import { eq, desc, sql, and, gte, or, like, inArray } from 'drizzle-orm';
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -491,14 +491,77 @@ app.post('/api/settings', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Identities used by the seeded/demo data. Kept in sync with the MOCK_NAMES
+ * guard in src/context/AppContext.tsx.
+ */
+const DEMO_STAFF_NAMES = [
+  'brima sesay',
+  'mohamed kamara',
+  'alpha koroma',
+  'ibrahim conteh',
+  'alusine kamara',
+  'mohamed sesay',
+  'demo user',
+  'test user',
+  'system',
+];
+
 app.delete('/api/sales/mock', async (req: Request, res: Response) => {
   try {
-    // Delete all sales records. Wait, deleting all sales is aggressive, but since the user called it "mock data" and the app is in development, this is what they asked for.
-    // In a real system, we'd delete where invoiceNumber like 'DEMO%' etc.
-    // For now we truncate the sales records table.
-    await db.delete(salesRecords);
-    broadcastDbChange('sales_records', 'delete', { all: true });
-    res.json({ success: true, message: 'Mock data purged' });
+    // ---------------------------------------------------------------------
+    // SAFETY FIX (Issue #5)
+    // ---------------------------------------------------------------------
+    // This endpoint used to run `db.delete(salesRecords)` with NO where clause,
+    // i.e. it TRUNCATED the entire sales table. The Developer-portal button that
+    // calls it is labelled "Purge Demo Data" and promises to remove "mock
+    // records", so clicking it destroyed every real transaction the factory had
+    // ever logged. That is the worst possible failure mode for a button sitting
+    // in a "Danger Zone" panel.
+    //
+    // Now:
+    //   * Default: delete ONLY rows that are identifiable as demo/mock data
+    //     (DEMO-/MOCK- invoice numbers, or recorded under a known seeded name).
+    //   * Full wipe requires an explicit two-part confirmation token, and is
+    //     reported back with the number of rows it destroyed.
+    const wantsFullWipe =
+      req.query?.scope === 'all' && req.query?.confirm === 'TRUNCATE_ALL';
+
+    let removed: { id: number }[] = [];
+
+    if (wantsFullWipe) {
+      removed = await db.delete(salesRecords).returning({ id: salesRecords.id });
+      console.warn(
+        `[sales/mock] FULL WIPE requested - ${removed.length} sales record(s) permanently deleted.`
+      );
+    } else {
+      removed = await db
+        .delete(salesRecords)
+        .where(
+          or(
+            like(salesRecords.invoiceNumber, 'DEMO-%'),
+            like(salesRecords.invoiceNumber, 'MOCK-%'),
+            like(salesRecords.invoiceNumber, 'demo-%'),
+            like(salesRecords.invoiceNumber, 'mock-%'),
+            inArray(sql`lower(${salesRecords.staffName})`, DEMO_STAFF_NAMES)
+          )
+        )
+        .returning({ id: salesRecords.id });
+    }
+
+    broadcastDbChange('sales_records', 'delete', {
+      all: wantsFullWipe,
+      count: removed.length,
+    });
+
+    res.json({
+      success: true,
+      message: wantsFullWipe
+        ? `Sales table truncated: ${removed.length} record(s) permanently deleted.`
+        : `Demo data purged: ${removed.length} mock record(s) removed. Real transactions preserved.`,
+      deletedCount: removed.length,
+      scope: wantsFullWipe ? 'all' : 'demo-only',
+    });
   } catch (err: any) {
     console.error('Delete mock sales error:', err);
     res.status(500).json({ error: err.message || 'Failed to delete mock sales' });

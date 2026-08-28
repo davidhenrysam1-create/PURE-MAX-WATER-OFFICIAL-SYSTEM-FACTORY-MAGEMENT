@@ -2,7 +2,8 @@
  * AppContext - Central State Manager for Pure Max Factory Management System
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
+import { localDateKey, startOfLocalDay, msUntilNextLocalMidnight } from '../utils/dateUtils';
 import {
   User,
   UserRole,
@@ -170,6 +171,14 @@ interface AppContextType {
   updateTheme: (newTheme: Partial<ThemeConfig>) => void;
   publishSystemUpdate: (version: string) => void;
   resetToFreshDatabase: () => void;
+
+  // Daily (24-hour) window & manual reset (Issue #4)
+  todayDateKey: string;
+  dailyWindowStart: number;
+  resetDailyCounters: () => void;
+
+  // Demo / mock data purge (Issue #5)
+  purgeDemoData: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   isShareModalOpen: boolean;
@@ -477,6 +486,176 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     root.classList.toggle('dark', isDark);
     root.style.colorScheme = isDark ? 'dark' : 'light';
   }, [theme.darkMode]);
+
+  // ---------------------------------------------------------------------------
+  // ISSUE #4 — Daily (24-hour) window & Manager manual reset
+  // ---------------------------------------------------------------------------
+  // `todayDateKey` is a LOCAL-calendar date string (see utils/dateUtils). It is
+  // deliberately held in state rather than recomputed inline: the dashboard's
+  // "today" figures were previously evaluated once per render from
+  // `new Date().toISOString()`, so a browser tab left open past midnight kept
+  // showing yesterday's totals until something unrelated re-rendered. The
+  // ticker below flips this value exactly at local midnight, forcing the
+  // daily cards to re-evaluate and roll over to zero on their own.
+  const [todayDateKey, setTodayDateKey] = useState<string>(() => localDateKey());
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const rollOver = () => {
+      setTodayDateKey(localDateKey());
+      schedule();
+    };
+
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(rollOver, msUntilNextLocalMidnight());
+    }
+
+    schedule();
+
+    // Mobile browsers freeze timers in backgrounded tabs, so the timeout above
+    // may fire late (or not at all). Re-check whenever the tab comes back.
+    const handleVisibility = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      const key = localDateKey();
+      if (key !== todayDateKey) {
+        setTodayDateKey(key);
+      }
+      schedule();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+    // `todayDateKey` is intentionally omitted: including it would resubscribe
+    // on every midnight rollover. `schedule()` already re-arms itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Manager/Developer "Reset Daily Counters" marker, in epoch ms.
+  // This is NON-DESTRUCTIVE: resetting only moves the start of the "today"
+  // window forward. Every record stays in state and in the database, so
+  // lifetime totals, reports and the Excel export are untouched.
+  const [dailyResetAtMs, setDailyResetAtMs] = useState<number>(() => {
+    const raw = safeLoad<number>('puremax_daily_reset_at', 0);
+    return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+  });
+
+  useEffect(() => {
+    safeLocalStorageSet('puremax_daily_reset_at', dailyResetAtMs);
+  }, [dailyResetAtMs]);
+
+  // Start of the current daily window: whichever is LATER — local midnight, or
+  // the last manual reset. Once midnight passes, startOfLocalDay() overtakes a
+  // stale reset marker automatically, so the 24-hour auto-reset still applies.
+  const dailyWindowStart = useMemo(() => {
+    return Math.max(startOfLocalDay(), dailyResetAtMs || 0);
+  }, [todayDateKey, dailyResetAtMs]);
+
+  const resetDailyCounters = () => {
+    const now = Date.now();
+    setDailyResetAtMs(now);
+    // Keep the calendar key in step so the UI flips immediately.
+    setTodayDateKey(localDateKey());
+
+    logAudit(
+      'DAILY_COUNTERS_RESET',
+      `Daily summary counters reset to zero by ${currentUser?.name || 'Manager'} at ${new Date(now).toLocaleString()}. Historical records were preserved.`
+    );
+
+    showToast(
+      "Today's summary counters have been reset to zero. All historical records are preserved in reports.",
+      'success',
+      'Daily Counters Reset'
+    );
+  };
+
+  // ---------------------------------------------------------------------------
+  // ISSUE #5 — Demo / mock data purge
+  // ---------------------------------------------------------------------------
+  // Seed data in src/data/initialData.ts is already empty, but demo rows can
+  // still linger in two places: older builds wrote them into localStorage, and
+  // a connected PostgreSQL instance may still hold them from an earlier demo.
+  // This sweeps both, and only ever removes records that cannot be attributed
+  // to a real, active staff account.
+  const purgeDemoData = () => {
+    let removedSales = 0;
+    let removedAttendance = 0;
+    let removedProduction = 0;
+
+    const isRealActiveUser = (identifier?: string) => {
+      if (!identifier) return false;
+      const needle = String(identifier).trim().toLowerCase();
+      return users.some(
+        (u) =>
+          u.status !== 'suspended' &&
+          (String(u.id).toLowerCase() === needle ||
+            String(u.employeeId).toLowerCase() === needle ||
+            String(u.name).toLowerCase() === needle)
+      );
+    };
+
+    setSales((prev) => {
+      const kept = prev.filter((s) => {
+        // A demo row is one explicitly flagged, or one with no traceable author.
+        const flagged = (s as any).isDemo === true || (s as any).isMock === true || (s as any).isSeed === true;
+        const traceable = isRealActiveUser(s.recordedById) || isRealActiveUser(s.recordedByName);
+        if (flagged || !traceable) {
+          removedSales += 1;
+          return false;
+        }
+        return true;
+      });
+      return kept;
+    });
+
+    setAttendance((prev) => {
+      const kept = prev.filter((a) => {
+        const flagged = (a as any).isDemo === true || (a as any).isMock === true;
+        if (flagged || !isRealActiveUser(a.userId)) {
+          removedAttendance += 1;
+          return false;
+        }
+        return true;
+      });
+      return kept;
+    });
+
+    setProduction((prev) => {
+      const kept = prev.filter((p) => {
+        const flagged = (p as any).isDemo === true || (p as any).isMock === true;
+        if (flagged) {
+          removedProduction += 1;
+          return false;
+        }
+        return true;
+      });
+      return kept;
+    });
+
+    // Ask the server to do the same sweep when one is reachable. On a static
+    // GitHub Pages deploy this simply 404s and is ignored.
+    fetch('/api/sales/mock', { method: 'DELETE' }).catch(() => {
+      /* offline / static deploy — local purge is sufficient */
+    });
+
+    logAudit(
+      'PURGE_DEMO_DATA',
+      `Purged demo/mock records: ${removedSales} sales, ${removedAttendance} attendance, ${removedProduction} production.`
+    );
+
+    showToast(
+      `Demo data purged: ${removedSales} sales, ${removedAttendance} attendance, ${removedProduction} production records removed.`,
+      'success',
+      'Demo Data Purged'
+    );
+  };
 
   // Real-Time GPS Tracking for Logged-In Tricycle Staff & Van Staff Only
   const [staffLiveLocations, setStaffLiveLocations] = useState<StaffLiveLocation[]>(() => {
@@ -2614,6 +2793,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateTheme,
         publishSystemUpdate,
         resetToFreshDatabase,
+        todayDateKey,
+        dailyWindowStart,
+        resetDailyCounters,
+        purgeDemoData,
         staffLiveLocations,
         updateStaffLiveLocation,
         updateMultipleStaffLocations,

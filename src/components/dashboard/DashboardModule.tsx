@@ -6,6 +6,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserRole } from '../../types';
 import { compressImage } from '../../utils/imageCompressor';
+import { recordTimestamp } from '../../utils/dateUtils';
 import {
   TrendingUp,
   Banknote,
@@ -68,7 +69,15 @@ export const DashboardModule: React.FC = () => {
     theme,
     updateTheme,
     showToast,
+    todayDateKey,
+    dailyWindowStart,
+    resetDailyCounters,
   } = useApp();
+
+  // Manager/Developer "Reset Daily Counters" — two-step confirmation state.
+  const canResetDaily = ['manager', 'second_manager', 'developer'].includes(activeRole);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
 
   // Daily Developer Branding State
   const loginFileRef = useRef<HTMLInputElement>(null);
@@ -193,13 +202,32 @@ export const DashboardModule: React.FC = () => {
     setTimeout(() => setBrandingStatusMsg(null), 5000);
   };
 
+  // -------------------------------------------------------------------------
   // Financial Computations in Leones (Le)
-  const todayStrForProd = new Date().toISOString().split("T")[0];
+  // -------------------------------------------------------------------------
+  // Daily figures are now window-based rather than calendar-string based:
+  //  * `dailyWindowStart` is the later of local midnight and the last manual
+  //    reset (see AppContext), so the Manager's "Reset Daily Counters" zeroes
+  //    the cards without deleting a single record.
+  //  * `todayDateKey` flips exactly at local midnight (a timer re-renders this
+  //    component), so the cards roll over on their own even if the tab has been
+  //    open for days.
+  // The old code used `new Date().toISOString().split('T')[0]`, which is a UTC
+  // date and was also captured once per render — hence "daily totals never
+  // reset".
+  const inDailyWindow = React.useCallback(
+    (record: { date?: string; createdAt?: string }) => {
+      const ts = recordTimestamp(record);
+      if (Number.isNaN(ts)) return record.date === todayDateKey;
+      return ts >= dailyWindowStart;
+    },
+    [dailyWindowStart, todayDateKey]
+  );
 
   // Daily Computations
-  const todaysSales = sales.filter(s => s.date === todayStrForProd);
-  const todaysExpenses = expenses.filter(e => e.date === todayStrForProd);
-  const todaysProduction = production.filter(p => p.date === todayStrForProd);
+  const todaysSales = sales.filter(inDailyWindow);
+  const todaysExpenses = expenses.filter(inDailyWindow);
+  const todaysProduction = production.filter(inDailyWindow);
 
   const dailySalesLe = todaysSales.reduce((acc, curr) => acc + curr.totalAmountLe, 0);
   const dailyExpensesLe = todaysExpenses.reduce((acc, curr) => acc + curr.amountLe, 0);
@@ -228,11 +256,41 @@ export const DashboardModule: React.FC = () => {
   ];
 
   const myProductionRecords = production.filter(p => p.outerOperatorName === currentUser?.name || p.rollOperatorName === currentUser?.name);
-  const myTodayProductionRecords = myProductionRecords.filter(p => p.date === todayStrForProd);
+  const myTodayProductionRecords = myProductionRecords.filter(inDailyWindow);
   const myLifetimeBundles = myProductionRecords.reduce((acc, curr) => acc + curr.bundlesProduced, 0);
   const myTodayBundles = myTodayProductionRecords.reduce((acc, curr) => acc + curr.bundlesProduced, 0);
 
   const pendingAttendance = attendance.filter((a) => a.status === 'pending');
+
+  // ---------------------------------------------------------------------------
+  // ISSUE #5 — "Recent Sales Transactions" must be a LIVE feed
+  // ---------------------------------------------------------------------------
+  // Previously this rendered `sales.slice(0, 4)` — the first four rows in
+  // whatever order they happened to sit in state, including seeded/demo rows and
+  // non-sales entries such as "Damaged Bundles". It is now bound strictly to
+  // transactions logged by an ACTIVE Production Sales Officer account, newest
+  // first. Anything unattributable is treated as demo/legacy noise and hidden
+  // here (it is still present in Reports and the Excel export, and
+  // `purgeDemoData()` in AppContext can remove it outright).
+  const liveSalesFeed = React.useMemo(() => {
+    const officerKeys = new Set<string>();
+    users.forEach((u) => {
+      if (u.role === 'sales_manager' && u.status !== 'suspended') {
+        officerKeys.add(String(u.id).toLowerCase());
+        officerKeys.add(String(u.name).toLowerCase().trim());
+      }
+    });
+
+    return sales
+      .filter((s) => {
+        if (s.category === 'Damaged Bundles') return false;
+        const byId = String(s.recordedById || '').toLowerCase();
+        const byName = String(s.recordedByName || '').toLowerCase().trim();
+        return officerKeys.has(byId) || officerKeys.has(byName);
+      })
+      .sort((a, b) => (recordTimestamp(b) || 0) - (recordTimestamp(a) || 0))
+      .slice(0, 4);
+  }, [sales, users]);
 
   const latestEquipmentLog = equipmentLogs[0] || {
     tdsLevelPpm: 0,
@@ -241,7 +299,7 @@ export const DashboardModule: React.FC = () => {
     uvSterilizerStatus: 'none',
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayDateKey;
   const userTodayRecord = attendance.find((a) => a.userId === currentUser?.id && a.date === todayStr);
   const userCheckedInToday = !!userTodayRecord;
   const isEligibleForCheckIn = ['operator', 'staff', 'tricycle_staff', 'van_staff', 'engineer', 'sales_manager'].includes(activeRole);
@@ -345,8 +403,18 @@ export const DashboardModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Developer Role Inspection Sandbox (DEVELOPER DASHBOARD ONLY - REAL DATABASE ACCOUNTS STRICTLY) */}
-      {(currentUser?.role === 'developer' || isInspecting) && (
+      {/* Developer Role Inspection Sandbox (DEVELOPER DASHBOARD ONLY - REAL DATABASE ACCOUNTS STRICTLY)
+          ISSUE #12: this previously rendered when `currentUser?.role === 'developer' || isInspecting`.
+          During an inspection the Developer's session IS the target staff account, so
+          `currentUser.role` is no longer 'developer' — but `isInspecting` is true, so the
+          whole grid of "Inspect As …" buttons was still painted INSIDE the staff member's
+          dashboard. That is the "secondary inspection triggers leaking into the target
+          dashboard" the spec calls out.
+
+          It now renders only on the Developer's own dashboard, and only when not
+          inspecting. While inspecting, the single sticky "Exit Inspection Mode" control
+          in InspectionBanner.tsx is the only way out. */}
+      {currentUser?.role === 'developer' && !isInspecting && (
         <div
           id="developer-inspection-sandbox-container"
           className="p-5 rounded-2xl bg-slate-900 border border-purple-900/50 shadow-xl space-y-4"
@@ -965,10 +1033,33 @@ export const DashboardModule: React.FC = () => {
           <div className="col-span-1 sm:col-span-2 lg:col-span-4 space-y-6">
             {/* TODAY'S SUMMARY */}
             <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3">
-                <Clock className="w-4 h-4 text-emerald-500" />
-                TODAY'S SUMMARY (24-Hour Period)
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-emerald-500" />
+                    TODAY'S SUMMARY (24-Hour Period)
+                  </h3>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">
+                    Auto-resets at local midnight • {todayDateKey}
+                  </p>
+                </div>
+
+                {/* Manager / Developer manual reset control */}
+                {canResetDaily && (
+                  <button
+                    id="reset-daily-counters-btn"
+                    onClick={() => {
+                      setResetConfirmText('');
+                      setShowResetConfirm(true);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/60 font-bold text-[11px] flex items-center gap-1.5 transition cursor-pointer shrink-0"
+                    title="Reset today's summary counters to zero (historical records are preserved)"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Daily Counters</span>
+                  </button>
+                )}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800/80 shadow-sm flex flex-col">
                   <span className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider font-mono">Production</span>
@@ -1365,7 +1456,10 @@ export const DashboardModule: React.FC = () => {
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                   <ShoppingCart className="w-5 h-5 text-emerald-500" />
-                  Recent Sales Transactions
+                  Live Sales Transactions
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[9px] font-black uppercase tracking-wide">
+                    Sales Officer Feed
+                  </span>
                 </h3>
                 <button
                   onClick={() => setActiveTab('sales')}
@@ -1387,7 +1481,21 @@ export const DashboardModule: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                    {sales.slice(0, 4).map((s) => (
+                    {liveSalesFeed.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center">
+                          <div className="flex flex-col items-center gap-1.5 text-slate-500">
+                            <ShoppingCart className="w-5 h-5 text-slate-400" />
+                            <span className="text-xs font-semibold">No live transactions yet</span>
+                            <span className="text-[10px] max-w-xs">
+                              This feed shows sales logged by active Production Sales Officers. It will populate
+                              automatically as they record dispatches.
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                    {liveSalesFeed.map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                         <td className="py-2.5 px-2 font-mono text-slate-500">{s.date}</td>
                         <td className="py-2.5 px-2 font-medium">
@@ -1598,6 +1706,83 @@ export const DashboardModule: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* ---------------------------------------------------------------------
+       * Reset Daily Counters — double confirmation (Issue #4)
+       * Restricted to Manager / 2nd Manager / Developer. Two deliberate steps
+       * (open dialog, then type RESET) plus an explicit confirmation of what is
+       * and is not affected, so the button can never be hit by accident.
+       * ------------------------------------------------------------------- */}
+      {showResetConfirm && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+          onClick={() => setShowResetConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-300 flex items-center justify-center border border-amber-400/40 shrink-0">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-amber-900 dark:text-amber-200">
+                    Reset Today's Counters?
+                  </h3>
+                  <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                    Step 2 of 2 — confirm to proceed
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900">
+                <p className="font-bold text-emerald-900 dark:text-emerald-300 mb-1">What this does</p>
+                <p className="text-emerald-800 dark:text-emerald-400 leading-relaxed">
+                  Sets today's Production, Revenue and Expenses counters back to zero so you can start a fresh
+                  shift tally. <strong>No records are deleted.</strong> Every transaction stays in the database, in
+                  Reports, and in the Excel backup.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-800 dark:text-slate-200">
+                  Type <span className="font-mono text-rose-600 dark:text-rose-400">RESET</span> to confirm
+                </label>
+                <input
+                  value={resetConfirmText}
+                  onChange={(e) => setResetConfirmText(e.target.value)}
+                  placeholder="RESET"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono tracking-widest focus:ring-2 focus:ring-amber-500 focus:outline-none uppercase"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={resetConfirmText.trim().toUpperCase() !== 'RESET'}
+                onClick={() => {
+                  resetDailyCounters();
+                  setShowResetConfirm(false);
+                  setResetConfirmText('');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
+              >
+                Confirm Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
