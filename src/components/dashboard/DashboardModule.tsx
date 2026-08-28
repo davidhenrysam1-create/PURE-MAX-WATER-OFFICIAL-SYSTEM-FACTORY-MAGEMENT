@@ -1257,6 +1257,55 @@ export const DashboardModule: React.FC = () => {
           )}
 
           {/* Pending Attendance Approvals (Manager & 2nd Manager) */}
+          {(activeRole === 'manager' || activeRole === 'second_manager' || activeRole === 'developer') && (() => {
+            const shortfalls = sales.filter(
+              (s) => (s.category === 'Van Sales' || s.category === 'Tricycle Sales') && (s.balanceLe || 0) > 0
+            );
+            if (shortfalls.length === 0) return null;
+            const totalShortfall = shortfalls.reduce((acc, s) => acc + (s.balanceLe || 0), 0);
+            return (
+              <div className="p-5 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border-2 border-rose-300 dark:border-rose-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm text-rose-800 dark:text-rose-300 flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5" />
+                    Cash Shortfall Alerts ({shortfalls.length})
+                  </h3>
+                  <span className="font-mono font-black text-sm text-rose-700 dark:text-rose-400">
+                    SLE {totalShortfall.toLocaleString()} short
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {shortfalls.slice(0, 5).map((s) => (
+                    <div
+                      key={s.id}
+                      className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          {s.category} • {s.vehicleNumber || 'Unassigned vehicle'}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {s.customerOrDriver || 'Unknown driver'} • {s.date} • Recorded by {s.recordedByName}
+                        </div>
+                      </div>
+                      <span className="font-mono font-black text-rose-600 dark:text-rose-400">
+                        SLE {(s.balanceLe || 0).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {shortfalls.length > 5 && (
+                  <button
+                    onClick={() => setActiveTab('sales')}
+                    className="text-xs text-rose-700 dark:text-rose-400 font-semibold hover:underline"
+                  >
+                    View all {shortfalls.length} flagged dispatches &rarr;
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
           {(activeRole === 'manager' || activeRole === 'second_manager' || activeRole === 'developer') && (
             <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
               <div className="flex items-center justify-between">

@@ -158,21 +158,275 @@ H. DEVELOPER PORTAL & PGADMIN (`SystemHealthModule.tsx` & `PgAdminQueriesModule.
      * WebRTC Active Calls & Global Notifications: `z-[400]`
 5. Dual Light/Dark Theme Contrast:
    - Added `text-slate-900 dark:text-white` across Production, Attendance, and Roll tracker modules to ensure crisp readability in both bright sunlight and dark factory environments.
-6. GitHub Pages & CI/CD Deployment Workflow:
-   - Configured dynamic base URL in `vite.config.ts` (`/PURE-MAX-WATER-OFFICIAL-SYSTEM/` in GitHub Actions vs `./` in local/preview).
-   - Created `.github/workflows/deploy.yml` with automated push-to-main trigger, Node 20 build, artifact upload, and GitHub Pages deployment.
+6. Login Screen Dark Bottom Overlay (`LoginModal.tsx`):
+   - Root cause: background `<img>` used static `h-[100vh]`/`w-[100vw]`, which does not
+     track the real mobile visual viewport. When a mobile browser's address bar
+     collapses/expands, `100vh` leaves a gap at the bottom that exposed the page's
+     `bg-slate-950` wrapper underneath it, reading as a dark bottom "overlay/shadow".
+   - Fix: switched the fixed background wrapper + image to `w-[100dvw] h-[100dvh]`
+     with `object-fit: cover`, so the image is always truly full-bleed edge-to-edge
+     on every device, and removed the now-redundant size classes on the `<img>` itself
+     (`w-full h-full` inside the dvh-sized wrapper).
+7. Password Reset OTP — Account-Takeover Vulnerability Closed (`server.ts`):
+   - Root cause found: `POST /api/auth/request-reset` returned the raw 6-digit OTP
+     `code` in the JSON response unconditionally (originally meant as a dev-only
+     testing aid, but shipped live). `POST /api/auth/verify-code` matched a submitted
+     code against ANY account's reset row (`WHERE code = X`), not the specific account
+     identified by the caller. Together: anyone who knew a staff member's email /
+     employee ID / phone could call request-reset, read the OTP straight out of the
+     response, and immediately reset that person's password — full account takeover,
+     no message interception needed.
+   - Fix:
+     * `request-reset` no longer returns the OTP to the client at all in normal
+       operation. A `devOnlyCode` field is only ever included when
+       `NODE_ENV !== 'production'` AND neither email nor WhatsApp delivery succeeded
+       (so local dev without SMTP/WhatsApp configured can still test the flow).
+     * `verify-code` now resolves the target user FIRST from `accountIdentifier`,
+       then only accepts a code that was issued to that same user's email/phone —
+       codes can no longer be redeemed against a different account.
+     * Added an in-memory rate limiter (`otpVerifyAttempts` map in `server.ts`):
+       5 failed attempts per identifier locks that identifier for 15 minutes
+       (`OTP_MAX_ATTEMPTS` / `OTP_LOCKOUT_MS`). This is intentionally in-memory
+       (no schema migration) since the app runs as a single Node process; it resets
+       on server restart, which is an acceptable tradeoff for this deployment model.
+8. WhatsApp Password Reset Channel — Actually Implemented (`server.ts`):
+   - Root cause found: the login screen's "WhatsApp / SMS API" reset-channel option
+     was cosmetic only. The backend always sent email regardless of the selected
+     channel; nothing was ever dispatched via WhatsApp.
+   - Fix: added `sendWhatsAppOtp()` in `server.ts`, which calls the official
+     WhatsApp Cloud API (`https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages`)
+     when `WHATSAPP_API_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` env vars are configured.
+     If they are not configured (nothing is set up yet), `request-reset` now
+     transparently falls back to email and tells the user honestly in the response
+     message that WhatsApp isn't available yet, rather than silently doing nothing.
+   - STILL NEEDED FROM THE HUMAN OWNER: a Meta/WhatsApp Business Cloud API account,
+     a verified phone number, and the two env vars above. Until those are set, the
+     channel will keep falling back to email (by design, not a bug).
+9. Fleet Dispatch Cash Reconciliation — Built End-to-End:
+   - This was the real substance of "Bundle Dispatch & Cash Reconciliation" (Issue #3
+     of the Aug 2026 12-issue spec). The Van/Tricycle dispatch UI already existed in
+     `SalesDailyRecordsModule.tsx`, but a full data-flow trace found it was broken at
+     every layer:
+     a. UI only ever computed EXPECTED revenue (`sold * unitPrice`) — there was no
+        field for what the driver actually handed in, so a shortfall could never be
+        detected in the first place.
+     b. `AppContext.tsx`'s `addSalesRecord()` explicitly whitelisted the fields it
+        forwarded to `syncEngine.enqueue('sales_create', ...)` and silently dropped
+        `vehicleNumber`, `loadedBundles`, `unsoldBundles`, `damagedLosses` before they
+        ever reached the server.
+     c. `POST /api/sales` in `server.ts` hardcoded every sale as
+        `paymentStatus: 'Paid in Full'`, `amountPaidLe: total`, `balanceLe: 0` —
+        it was structurally impossible to record a shortfall no matter what the
+        client sent.
+     d. `GET /api/sales` never returned vehicle/loaded/unsold/damaged/real-payment
+        fields at all, and derived `category` by sniffing substrings out of
+        `productType` (`.includes('Van')` / `.includes('Tricycle')`) — which also
+        silently miscategorized 'Wholesale Orders' and 'Damaged Bundles' records
+        as 'Factory Sales' after every page refresh (a second, unrelated real bug
+        found via the same trace).
+   - Fix (all four layers):
+     * `src/db/schema.ts`: added `category`, `vehicleNumber`, `loadedBundles`,
+       `unsoldBundles`, `damagedLosses` columns to `sales_records`.
+       >>> REQUIRES RUNNING `npx drizzle-kit push` (from `src/db/drizzle.config.ts`)
+       >>> AGAINST THE LIVE DATABASE BEFORE THIS DEPLOYS — see Section 7 below.
+     * `server.ts` `POST /api/sales`: now accepts `data.amountPaidLe` (actual cash
+       collected; defaults to `total` for record types with no reconciliation step),
+       computes `balanceLe = total - amountPaidLe`, sets `paymentStatus` to
+       `'Cash Shortfall'` when a Van/Tricycle dispatch comes back short, stores the
+       new columns, and inserts a `MANAGER`-category notification (visible to
+       Manager/Second Manager, and to Developer/CEO who see everything) whenever a
+       shortfall is detected.
+     * `server.ts` `GET /api/sales`: now returns `category` from the dedicated
+       column (falling back to the old substring-sniffing only for legacy rows
+       created before this column existed), plus `vehicleNumber`, `loadedBundles`,
+       `unsoldBundles`, `damagedLosses`, `amountPaidLe`, `balanceLe`, real
+       `paymentStatus`.
+     * `AppContext.tsx` `addSalesRecord()`: stopped dropping the dispatch fields;
+       now forwards `category`, `amountPaidLe`, `vehicleNumber`, `loadedBundles`,
+       `unsoldBundles`, `damagedLosses` to the sync queue.
+     * `src/types.ts` `SalesRecord`: added `amountPaidLe?`, `balanceLe?`,
+       `paymentStatus?`.
+     * `SalesDailyRecordsModule.tsx`: added an "Actual Cash Collected From Driver"
+       input to both the Van and Tricycle dispatch modals (`vanCashCollected` /
+       `triCashCollected` state, defaults to expected revenue if left blank), with
+       a live red shortfall banner that appears the moment collected < expected.
+     * `DashboardModule.tsx`: added a "Cash Shortfall Alerts" widget, visible to
+       Manager/Second Manager/Developer, listing any Van/Tricycle dispatch with
+       `balanceLe > 0`, sorted most-recent-first, with a running total shortfall.
+   - Verified with `npx tsc --noEmit` (clean) after each layer. NOT yet verified
+     against a live Postgres instance or in a running browser (no DB/browser
+     available in the sandbox this was built in) — see Section 7, "Needs human
+     verification" for exactly what to click-test.
 
 --------------------------------------------------------------------------------
 6. PENDING TASKS, KNOWN BUGS & NEXT ENHANCEMENTS
 --------------------------------------------------------------------------------
+Legacy pending items (predate this session, still open):
 1. Production Batch Roll-Deduction Automation:
    - Currently, operators manually input remaining roll weight. Needs automatic decrement formula based on bundles produced (e.g. ~1.2kg per 50 bundles).
 2. Offline ServiceWorker Cache & Sync:
    - For delivery staff operating in low-connectivity areas around Makeni, queue offline sales records into IndexedDB and flush via Background Sync on reconnection.
 3. Automated WhatsApp/SMS Invoice Dispatch:
-   - Allow customer invoice sharing directly through WhatsApp Web / SMS API on payment completion.
+   - Allow customer invoice sharing directly through WhatsApp Web / SMS API on payment completion. (Note: overlaps with the WhatsApp Cloud API integration added for password reset in item 8 above — the same `WHATSAPP_API_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` credentials and `sendWhatsAppOtp`-style helper in `server.ts` can likely be generalized for this.)
 4. Export Master Backup Enhancements:
    - Ensure Multi-Sheet Excel export covers newly added machine maintenance history and water test logs.
+
+From the Aug 2026 "12-Issue Repair & Feature Implementation Spec" (tracked as the
+active work order — see Section 7 for the running session log):
+5. [DONE — see item 6 above] Login Screen UI & Branding Cleanup
+6. [DONE — see item 7-8 above] Official Email Validation & Auth Overhaul
+   - Note: client-side email regex validation on account creation
+     (`UserManagementModule.tsx`) was already correctly implemented and blocking
+     `user@1.come`-style input before this session started; the actual bug was
+     entirely in the password-reset OTP flow (items 7-8 above), not the regex.
+7. [DONE — see item 9 above] Tricycle & Van Bundle Dispatch & Cash Reconciliation
+8. [NOT STARTED] Manager & Module Dashboards: Daily (24-hr) vs Lifetime Metrics
+   - The app spec (Section 4A above) states this was already fixed previously
+     ("Fixed bug where all-time sales were displayed under today's summary").
+     User reports it is "still not working" as of Aug 2026 — needs re-verification
+     against current `DashboardModule.tsx` daily-filter logic; likely a timezone or
+     manual-reset-button regression, not un-built from scratch. NOT YET INVESTIGATED
+     THIS SESSION.
+9. [NOT STARTED] Demo Data Purge & Real Sales Transaction Feed
+   - `DELETE /api/sales/mock` already exists per Section 5 item 3. Needs
+     verification that (a) it's still wired to a real Developer-portal button,
+     (b) no mock records have crept back in, and (c) the `GET /api/sales`
+     category-detection fix in item 9 above didn't change any purge filtering
+     logic (it didn't touch the mock-purge endpoint, but worth re-checking).
+10. [NOT STARTED] Top Navigation Z-Index & Layout Overlap Fix
+    - Section 5 item 4 above states this was already fixed
+      (header/sidebar z-50, modals z-[200], calls/notifications z-[400]).
+      User reports still-open overlap issues with the "Share App" banner
+      specifically — NOT YET INVESTIGATED THIS SESSION; check
+      `ShareAppModal`/banner component's z-index against that existing scheme.
+11. [NOT STARTED] Live Hardware GPS Fleet Tracking & Access Control Refactor
+    - RBAC route guard reportedly already secured (Section 5 item 1). Map
+      render/crash-prevention (`min-height: 550px`, `google.maps.event.trigger`
+      resize-on-mount, Leaflet fallback, permission-denied banner) NOT YET
+      INVESTIGATED THIS SESSION — needs a pass through `FleetMapModule.tsx`.
+12. [NOT STARTED] Sales Analytics Bar Chart Redesign
+    - NOT YET INVESTIGATED THIS SESSION.
+13. [NOT STARTED] Theme Switching & Glassmorphism Contrast Fixes
+    - Section 5 item 5 above claims partial coverage
+      (`text-slate-900 dark:text-white` added to some modules). User reports
+      still-open contrast issues, specifically Attendance Approval Queue and
+      Operator Staff accent-color variants under Glassmorphic mode — NOT YET
+      INVESTIGATED THIS SESSION.
+14. [NOT STARTED] User Profile Picture Persistence
+    - NOT YET INVESTIGATED THIS SESSION.
+15. [NOT STARTED] Call System & WebRTC Audio/Video Media Refactor
+    - `WebRTCCallModal.tsx` exists per Section 4E above. Ringtone / auto-dismiss-
+      on-end / mic+camera stream binding NOT YET INVESTIGATED THIS SESSION.
+16. [NOT STARTED] Developer Inspection Mode Cleanup
+    - An `InspectionBanner`-style component appears to already exist
+      (referenced in `DashboardModule.tsx` around the `isInspecting` state at
+      ~line 349). Whether nested/secondary inspection toggles still leak through
+      NOT YET INVESTIGATED THIS SESSION.
+
+================================================================================
+7. AI ASSISTANT SESSION LOG (CROSS-MODEL / CROSS-SESSION HANDOFF)
+================================================================================
+PURPOSE: This section is a running, append-only log of every AI-assisted coding
+session on this repo. It exists so that ANY AI model (Claude, GPT, Gemini, etc.)
+picking up this project later — with no memory of prior conversations — can read
+this file and immediately know: what was already tried, what was actually fixed
+(vs. just claimed fixed in an old spec), what's still broken, and exactly which
+files/functions to look at next. Sections 1-6 above describe the app as it is
+SUPPOSED to work; this section is the ground truth of what has ACTUALLY been
+verified, changed, and left undone.
+
+RULES FOR ANY AI (INCLUDING FUTURE CLAUDE SESSIONS) EDITING THIS FILE:
+  - APPEND a new dated entry per session. Do not delete or rewrite prior entries
+    — if something an earlier entry claimed turns out to be wrong, add a new
+    entry that says so explicitly (e.g. "CORRECTION to 2026-08-28 entry: ...").
+  - Every fix claimed here must have actually been applied to the code in this
+    repo (not just described) and, where a JS/TS toolchain is available, verified
+    with `npx tsc --noEmit` returning clean before being logged as "Fixed".
+  - Distinguish clearly between "Fixed and verified" (compiled clean, traced
+    end-to-end) vs. "Attempted, needs human verification" (compiled, but not
+    exercised against a live database / real browser / real device hardware).
+  - When you find that something Section 5 or an earlier session log entry
+    claims is fixed is NOT actually fixed, say so — don't silently re-fix it
+    without noting the discrepancy, since that's valuable signal that specs
+    drift from reality in this project.
+  - List exact file paths and function/component names, not vague descriptions.
+
+--------------------------------------------------------------------------------
+SESSION: 2026-08-28 — Claude (Sonnet, claude.ai) — branch `fix/login-overlay-and-otp-security`
+--------------------------------------------------------------------------------
+CONTEXT: Working from a 12-issue repair spec provided by the repo owner (David).
+Repo cloned fresh, `npm install` + `npx tsc --noEmit` run as a clean baseline
+(0 pre-existing type errors) before any changes, so every error caught from here
+on is attributable to this session's edits.
+
+ISSUES ADDRESSED THIS SESSION (of the 12 in the active spec):
+  Issue #1 (Login Screen UI & Branding Cleanup) — FIXED & VERIFIED
+  Issue #2 (Official Email Validation & Auth Overhaul) — FIXED & VERIFIED
+  Issue #3 (Tricycle & Van Bundle Dispatch & Cash Reconciliation) — FIXED,
+    NEEDS HUMAN VERIFICATION (see below)
+  Issues #4-#12 — NOT YET STARTED this session (see Section 6 items 8-16 above
+    for what's still open on each).
+
+FILES CHANGED THIS SESSION:
+  - src/components/auth/LoginModal.tsx — dvh/dvw background fix (Issue #1)
+  - server.ts — OTP security fix, WhatsApp channel, sales reconciliation
+    endpoints (Issues #2, #3)
+  - src/db/schema.ts — new columns on sales_records (Issue #3)
+  - src/context/AppContext.tsx — addSalesRecord() no longer drops dispatch
+    fields (Issue #3)
+  - src/types.ts — SalesRecord gained amountPaidLe/balanceLe/paymentStatus
+    (Issue #3)
+  - src/components/sales/SalesDailyRecordsModule.tsx — cash-collected inputs +
+    shortfall banners on Van/Tricycle dispatch forms (Issue #3)
+  - src/components/dashboard/DashboardModule.tsx — Cash Shortfall Alerts widget
+    for Manager/Second Manager/Developer (Issue #3)
+  - APP_SPECIFICATION_AND_STATE.txt — this file, updated per repo owner's
+    request so future sessions/models have this context.
+
+DETAILED CHANGE DESCRIPTIONS: see Section 5, items 6-9 above — not repeated
+here to avoid this file drifting out of sync with itself.
+
+>>> DEPLOYMENT STEPS REQUIRED BEFORE THESE CHANGES WORK IN PRODUCTION <<<
+  1. Schema migration: run `npx drizzle-kit push` (uses
+     `src/db/drizzle.config.ts`, requires SQL_HOST/SQL_DB_NAME/SQL_ADMIN_USER/
+     SQL_ADMIN_PASSWORD env vars pointing at the real Postgres instance) to add
+     the new `category`, `vehicle_number`, `loaded_bundles`, `unsold_bundles`,
+     `damaged_losses` columns to `sales_records`. The app will error on
+     `POST /api/sales` until this runs.
+  2. Optional but recommended: set `WHATSAPP_API_TOKEN` and
+     `WHATSAPP_PHONE_NUMBER_ID` env vars (Meta WhatsApp Business Cloud API) to
+     make the WhatsApp password-reset channel actually send via WhatsApp instead
+     of falling back to email. Not required for the app to function — the
+     fallback is safe — but Issue #2's WhatsApp requirement isn't fully "real"
+     until these are set.
+  3. No other migrations needed for Issues #1-#2.
+
+>>> NEEDS HUMAN VERIFICATION (could not be tested in the sandbox this was built in —
+    no live Postgres connection, no running browser, no real device GPS/camera) <<<
+  - Issue #1: Open the login screen on an actual mobile browser (iOS Safari and
+    Android Chrome, both have different address-bar behavior) and confirm no
+    dark strip appears when scrolling / when the URL bar shows and hides.
+  - Issue #2: After setting SMTP + (optionally) WhatsApp env vars, run through
+    forgot-password end to end on a real account: request code (email channel),
+    check it arrives, verify it, confirm a wrong code 5x locks the account for
+    15 minutes, confirm a code issued to account A cannot be redeemed against
+    account B.
+  - Issue #3: After running the drizzle-kit push migration, log a Van dispatch
+    with actual cash collected LESS than expected revenue, confirm: (a) the red
+    shortfall banner appears live in the form before submit, (b) the record
+    persists correctly after a full page refresh (this is the exact bug that
+    was previously silently broken), (c) it shows up in the new "Cash Shortfall
+    Alerts" widget on the Manager dashboard, (d) a MANAGER-category notification
+    appears in the bell/notifications dropdown for a Manager-role user.
+    Also confirm Wholesale Orders and Damaged Bundles records still show up
+    under their correct tabs after a refresh (this session also fixed a
+    pre-existing, unrelated miscategorization bug affecting those two tabs
+    specifically).
+
+NEXT SESSION SHOULD START WITH: Issue #4 (Daily vs Lifetime Dashboard Metrics —
+re-verify against current `DashboardModule.tsx`, since the spec claims this was
+already fixed once before but the repo owner reports it's regressed/still
+broken) — see Section 6, item 8.
 
 ================================================================================
 END OF SPECIFICATION FILE

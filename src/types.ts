@@ -70,6 +70,13 @@ export interface SalesRecord {
   loadedBundles?: number;
   unitPriceLe: number;
   totalAmountLe: number;
+  // Actual cash/payment collected for this sale. For Van/Tricycle dispatch this
+  // can be less than totalAmountLe if the driver came back short. Defaults to
+  // totalAmountLe for record types with no separate reconciliation step.
+  amountPaidLe?: number;
+  // totalAmountLe - amountPaidLe. Positive = cash shortfall / credit owed.
+  balanceLe?: number;
+  paymentStatus?: 'Paid in Full' | 'Cash Shortfall' | 'Partial / Credit Outstanding' | 'Overpaid' | string;
   recordedById: string;
   recordedByName: string;
   recordedByRole: UserRole;

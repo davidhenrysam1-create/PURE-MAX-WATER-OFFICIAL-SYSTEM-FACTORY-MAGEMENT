@@ -232,6 +232,78 @@ function getEmailTransporter() {
   return null;
 }
 
+// Helper: Send the OTP via the official WhatsApp Cloud API (Meta Business Platform).
+// Requires WHATSAPP_API_TOKEN and WHATSAPP_PHONE_NUMBER_ID to be configured on the
+// server. Returns true only on a confirmed successful dispatch; never throws.
+async function sendWhatsAppOtp(phone: string, otp: string, name: string): Promise<boolean> {
+  const token = process.env.WHATSAPP_API_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId || !phone) return false;
+
+  try {
+    const toNumber = phone.replace(/[^\d+]/g, '');
+    const resp = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: toNumber,
+        type: 'text',
+        text: {
+          body: `Pure Max Factory OS\nHello ${name}, your password reset verification code is: ${otp}\nThis code expires in 15 minutes. Do not share it with anyone.`,
+        },
+      }),
+    });
+    if (!resp.ok) {
+      console.error('WhatsApp API send error:', resp.status, await resp.text().catch(() => ''));
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('WhatsApp API send exception:', err);
+    return false;
+  }
+}
+
+// In-memory rate limiter for OTP verification attempts (5 attempts / 15 minutes per
+// identifier). This is intentionally simple (single-process, resets on deploy) rather
+// than a DB migration, since this server runs as a single Node process.
+const otpVerifyAttempts = new Map<string, { count: number; lockedUntil: number; windowStart: number }>();
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_LOCKOUT_MS = 15 * 60 * 1000;
+
+function checkOtpRateLimit(key: string): { allowed: boolean; retryAfterSeconds?: number } {
+  const now = Date.now();
+  const entry = otpVerifyAttempts.get(key);
+  if (!entry) return { allowed: true };
+  if (entry.lockedUntil && entry.lockedUntil > now) {
+    return { allowed: false, retryAfterSeconds: Math.ceil((entry.lockedUntil - now) / 1000) };
+  }
+  // Rolling window expired — reset silently
+  if (now - entry.windowStart > OTP_LOCKOUT_MS) {
+    otpVerifyAttempts.delete(key);
+    return { allowed: true };
+  }
+  return { allowed: true };
+}
+
+function recordOtpFailure(key: string) {
+  const now = Date.now();
+  const entry = otpVerifyAttempts.get(key) || { count: 0, lockedUntil: 0, windowStart: now };
+  entry.count += 1;
+  if (entry.count >= OTP_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + OTP_LOCKOUT_MS;
+  }
+  otpVerifyAttempts.set(key, entry);
+}
+
+function clearOtpAttempts(key: string) {
+  otpVerifyAttempts.delete(key);
+}
+
 // 1. Health & Database Diagnostic
 app.get('/api/health', async (req: Request, res: Response) => {
   try {
@@ -1034,25 +1106,44 @@ app.get('/api/sales', async (req: Request, res: Response) => {
   try {
     const records = await db.select().from(salesRecords).orderBy(desc(salesRecords.id));
     res.json(
-      records.map((s) => ({
-        id: `sls-${s.id}`,
-        receiptNumber: s.invoiceNumber,
-        date: s.date,
-        category: (s.productType.includes('Tricycle')
-          ? 'Tricycle Sales'
-          : s.productType.includes('Van')
-          ? 'Van Sales'
-          : 'Factory Sales') as any,
-        bundleQuantity: s.quantityBags,
-        unitPriceLe: s.unitPriceLe,
-        totalAmountLe: s.totalAmountLe,
-        customerOrDriver: s.customerName,
-        recordedById: 'system',
-        recordedByName: s.staffName,
-        recordedByRole: 'sales_manager' as const,
-        notes: `${s.customerPhone || ''} ${s.customerAddress || ''}`,
-        createdAt: s.createdAt?.toISOString() || new Date().toISOString(),
-      }))
+      records.map((s) => {
+        // Legacy rows (created before the `category` column existed) fall back
+        // to substring-sniffing productType; new rows always have category set.
+        const category =
+          s.category ||
+          (s.productType.includes('Tricycle')
+            ? 'Tricycle Sales'
+            : s.productType.includes('Van')
+            ? 'Van Sales'
+            : s.productType.includes('Wholesale')
+            ? 'Wholesale Orders'
+            : s.productType.includes('Damaged')
+            ? 'Damaged Bundles'
+            : 'Factory Sales');
+        return {
+          id: `sls-${s.id}`,
+          receiptNumber: s.invoiceNumber,
+          date: s.date,
+          category: category as any,
+          bundleQuantity: s.quantityBags,
+          unitPriceLe: s.unitPriceLe,
+          totalAmountLe: s.totalAmountLe,
+          amountPaidLe: s.amountPaidLe,
+          balanceLe: s.balanceLe,
+          paymentMethod: s.paymentMethod,
+          paymentStatus: s.paymentStatus,
+          vehicleNumber: s.vehicleNumber || undefined,
+          loadedBundles: s.loadedBundles ?? undefined,
+          unsoldBundles: s.unsoldBundles ?? undefined,
+          damagedLosses: s.damagedLosses ?? undefined,
+          customerOrDriver: s.customerName,
+          recordedById: 'system',
+          recordedByName: s.staffName,
+          recordedByRole: 'sales_manager' as const,
+          notes: `${s.customerPhone || ''} ${s.customerAddress || ''}`,
+          createdAt: s.createdAt?.toISOString() || new Date().toISOString(),
+        };
+      })
     );
   } catch (err: any) {
     console.error('Sales fetch error:', err);
@@ -1068,6 +1159,23 @@ app.post('/api/sales', async (req: Request, res: Response) => {
     const unitPrice = Number(data.unitPriceLe || 18);
     const total = Number(data.totalAmountLe || qty * unitPrice);
 
+    // Actual cash/payment collected. Defaults to the full total for record types
+    // that don't do a separate reconciliation step (Factory/Wholesale/Damaged),
+    // but Van/Tricycle dispatch sends the real amount the driver handed in —
+    // which can legitimately be less than `total` if there's a shortfall.
+    const amountPaid = data.amountPaidLe !== undefined ? Number(data.amountPaidLe) : total;
+    const balance = Math.round((total - amountPaid) * 100) / 100;
+
+    let paymentStatus = 'Paid in Full';
+    if (balance > 0) {
+      paymentStatus =
+        data.category === 'Van Sales' || data.category === 'Tricycle Sales'
+          ? 'Cash Shortfall'
+          : 'Partial / Credit Outstanding';
+    } else if (balance < 0) {
+      paymentStatus = 'Overpaid';
+    }
+
     const inserted = await db
       .insert(salesRecords)
       .values({
@@ -1076,20 +1184,41 @@ app.post('/api/sales', async (req: Request, res: Response) => {
         customerPhone: data.customerPhone || '+232 76 000 000',
         customerAddress: data.customerAddress || 'Factory Gate Outlet, Freetown',
         productType: data.category || 'Factory Direct Mineral Water Bundles',
+        category: data.category || 'Factory Sales',
         quantityBags: qty,
         unitPriceLe: unitPrice,
         totalAmountLe: total,
-        amountPaidLe: total,
-        balanceLe: 0,
-        paymentMethod: 'Cash / Mobile Money',
-        paymentStatus: 'Paid in Full',
+        amountPaidLe: amountPaid,
+        balanceLe: balance,
+        paymentMethod: data.paymentMethod || 'Cash / Mobile Money',
+        paymentStatus,
         deliveryType: data.category || 'Direct Outlet',
+        vehicleNumber: data.vehicleNumber || null,
+        loadedBundles: data.loadedBundles !== undefined ? Number(data.loadedBundles) : null,
+        unsoldBundles: data.unsoldBundles !== undefined ? Number(data.unsoldBundles) : null,
+        damagedLosses: data.damagedLosses !== undefined ? Number(data.damagedLosses) : null,
         staffName: data.recordedByName || 'Mariama Turay',
         date: data.date || new Date().toISOString().slice(0, 10),
       })
       .returning();
     if (inserted[0]) {
       broadcastDbChange('sales', 'create', inserted[0]);
+      // Flag cash shortfalls to Managers/Developers in real time, per spec.
+      if (balance > 0 && (data.category === 'Van Sales' || data.category === 'Tricycle Sales')) {
+        try {
+          await db.insert(notifications).values({
+            userId: null,
+            category: 'MANAGER',
+            targetRole: 'manager',
+            title: '⚠️ Cash Shortfall Detected',
+            message: `${data.category} dispatch (${data.vehicleNumber || 'unknown vehicle'}) recorded by ${data.recordedByName || 'a staff member'} is short by SLE ${balance.toLocaleString()}.`,
+            type: 'sales',
+            linkTab: 'sales',
+          });
+        } catch (notifyErr) {
+          console.error('Shortfall notification error:', notifyErr);
+        }
+      }
     }
     res.json(inserted[0]);
   } catch (err: any) {
@@ -1673,10 +1802,9 @@ app.post('/api/auth/request-reset', async (req: Request, res: Response) => {
       used: false,
     });
 
-    // Send email via nodemailer if configured
-    const transporter = getEmailTransporter();
-    let emailSent = false;
-    if (transporter && targetUser.email) {
+    const sendEmailOtp = async () => {
+      const transporter = getEmailTransporter();
+      if (!transporter || !targetUser.email) return false;
       try {
         await transporter.sendMail({
           from: process.env.SMTP_FROM || 'Pure Max Factory <no-reply@puremax.sl>',
@@ -1702,21 +1830,49 @@ app.post('/api/auth/request-reset', async (req: Request, res: Response) => {
             </div>
           `,
         });
-        emailSent = true;
+        return true;
       } catch (mailErr) {
         console.error('SMTP Mail send error:', mailErr);
+        return false;
+      }
+    };
+
+    let emailSent = false;
+    let whatsappSent = false;
+    let deliveryNote = '';
+
+    if (channel === 'phone') {
+      whatsappSent = await sendWhatsAppOtp(targetUser.phone || '', otp, targetUser.name);
+      if (!whatsappSent) {
+        // Honest fallback: WhatsApp isn't configured/working on this server —
+        // fall back to email rather than silently pretending to deliver nothing.
+        emailSent = await sendEmailOtp();
+        deliveryNote = emailSent
+          ? ' WhatsApp delivery is not available right now, so the code was sent to your registered email instead.'
+          : ' WhatsApp delivery is not configured on this server and no email is on file — please contact your Manager or Developer for a manual reset.';
+      }
+    } else {
+      emailSent = await sendEmailOtp();
+      if (!emailSent) {
+        deliveryNote = ' Email delivery could not be confirmed — if you do not receive it shortly, contact your Manager or Developer for a manual reset.';
       }
     }
 
-    // Masked destination
-    const maskedEmail = targetUser.email.replace(/(.{2})(.*)(?=@)/, (_g1, g2, g3) => g2 + '*'.repeat(Math.max(g3.length, 3)));
+    // Masked destination (never expose the raw code itself)
+    const maskedEmail = targetUser.email
+      ? targetUser.email.replace(/(.{2})(.*)(?=@)/, (_g1, g2, g3) => g2 + '*'.repeat(Math.max(g3.length, 3)))
+      : '';
+    const maskedPhone = targetUser.phone ? targetUser.phone.replace(/.(?=.{4})/g, '*') : '';
+    const destination = whatsappSent ? `WhatsApp (${maskedPhone})` : emailSent ? `email (${maskedEmail})` : 'your registered account';
 
     res.json({
       success: true,
-      message: `Account Verified: ${targetUser.name} (${targetUser.employeeId} - ${targetUser.role.replace('_', ' ').toUpperCase()}). 6-digit verification code sent to ${maskedEmail}. Code is valid for 15 minutes.`,
+      message: `Account Verified: ${targetUser.name} (${targetUser.employeeId} - ${targetUser.role.replace('_', ' ').toUpperCase()}). 6-digit verification code sent via ${destination}. Code is valid for 15 minutes.${deliveryNote}`,
       emailSent,
-      // Debug OTP for developer testing if SMTP not configured
-      code: otp,
+      whatsappSent,
+      // Only ever exposed to a developer running locally without any delivery
+      // channel configured — never returned when SMTP/WhatsApp are live or in production.
+      ...(process.env.NODE_ENV !== 'production' && !emailSent && !whatsappSent ? { devOnlyCode: otp } : {}),
     });
   } catch (err: any) {
     console.error('Request reset error:', err);
@@ -1734,8 +1890,34 @@ app.post('/api/auth/verify-code', async (req: Request, res: Response) => {
 
     const cleanInput = accountIdentifier.trim();
     const cleanCode = code.trim();
+    const rateLimitKey = cleanInput.toLowerCase();
 
-    // Find active non-expired OTP
+    const rateLimit = checkOtpRateLimit(rateLimitKey);
+    if (!rateLimit.allowed) {
+      const minutes = Math.ceil((rateLimit.retryAfterSeconds || 0) / 60);
+      return res.status(429).json({
+        error: `Too many incorrect attempts. Please try again in about ${minutes} minute${minutes === 1 ? '' : 's'}, or request a new code.`,
+      });
+    }
+
+    // Resolve the account the identifier actually belongs to first, so a code can
+    // only ever be redeemed against the account it was issued for.
+    const matched = await db
+      .select()
+      .from(users)
+      .where(
+        sql`LOWER(${users.email}) = LOWER(${cleanInput}) OR UPPER(${users.employeeId}) = UPPER(${cleanInput}) OR REPLACE(${users.phone}, ' ', '') = REPLACE(${cleanInput}, ' ', '')`
+      );
+
+    if (matched.length === 0) {
+      recordOtpFailure(rateLimitKey);
+      return res.status(404).json({ error: 'Associated user account not found.' });
+    }
+
+    const user = matched[0];
+
+    // Find an active, non-expired, unused OTP that was issued to THIS user
+    // (matches by email or phone, not by code alone).
     const validResets = await db
       .select()
       .from(passwordResets)
@@ -1743,31 +1925,20 @@ app.post('/api/auth/verify-code', async (req: Request, res: Response) => {
         and(
           eq(passwordResets.code, cleanCode),
           eq(passwordResets.used, false),
-          gte(passwordResets.expiresAt, new Date())
+          gte(passwordResets.expiresAt, new Date()),
+          sql`(LOWER(${passwordResets.email}) = LOWER(${user.email}) OR ${passwordResets.phone} = ${user.phone})`
         )
       )
       .orderBy(desc(passwordResets.id))
       .limit(1);
 
     if (validResets.length === 0) {
+      recordOtpFailure(rateLimitKey);
       return res.status(400).json({ error: 'Invalid or expired 6-digit verification code. Please request a new code.' });
     }
 
     const resetRecord = validResets[0];
-
-    // Find the user matching the reset record's email or phone
-    const matched = await db
-      .select()
-      .from(users)
-      .where(
-        sql`LOWER(${users.email}) = LOWER(${resetRecord.email}) OR ${users.phone} = ${resetRecord.phone}`
-      );
-
-    if (matched.length === 0) {
-      return res.status(404).json({ error: 'Associated user account not found.' });
-    }
-
-    const user = matched[0];
+    clearOtpAttempts(rateLimitKey);
 
     // Mark OTP as used
     await db
