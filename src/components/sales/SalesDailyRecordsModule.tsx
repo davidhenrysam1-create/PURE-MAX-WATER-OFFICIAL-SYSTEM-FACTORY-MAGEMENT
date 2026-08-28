@@ -90,6 +90,12 @@ export const SalesDailyRecordsModule: React.FC = () => {
 
   // 2. Van Sales Form State
   const [vanDate, setVanDate] = useState(new Date().toISOString().split('T')[0]);
+  // Issue #3 — dispatch audit fields required by the spec: the time the vehicle
+  // left the factory, and the stock officer who signed the load-out off.
+  const [vanDispatchTime, setVanDispatchTime] = useState(() =>
+    new Date().toTimeString().slice(0, 5)
+  );
+  const [vanStockOfficer, setVanStockOfficer] = useState('');
   const [vanVehicle, setVanVehicle] = useState('SL-VAN-01 (Makeni Central & Suburbs)');
   const [vanDriver, setVanDriver] = useState('');
   const [vanLoaded, setVanLoaded] = useState<number>(250);
@@ -103,6 +109,10 @@ export const SalesDailyRecordsModule: React.FC = () => {
 
   // 3. Tricycle Sales Form State
   const [triDate, setTriDate] = useState(new Date().toISOString().split('T')[0]);
+  const [triDispatchTime, setTriDispatchTime] = useState(() =>
+    new Date().toTimeString().slice(0, 5)
+  );
+  const [triStockOfficer, setTriStockOfficer] = useState('');
   const [triVehicle, setTriVehicle] = useState('PM-TRI-02 (Rogbere Junction Route)');
   const [triDriver, setTriDriver] = useState('');
   const [triLoaded, setTriLoaded] = useState<number>(100);
@@ -245,7 +255,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
       vehicleNumber: vanVehicle,
       customerOrDriver: vanDriver,
       paymentMethod: vanPayment,
-      notes: `Loaded: ${vanLoaded} | Sold: ${vanSold} | Unsold Returned: ${vanUnsold} | Damaged: ${vanDamaged}. ${vanNotes}`,
+      notes: `Loaded: ${vanLoaded} | Sold: ${vanSold} | Unsold Returned: ${vanUnsold} | Damaged: ${vanDamaged} | Dispatch Time: ${vanDispatchTime} | Stock Officer Sign-off: ${vanStockOfficer || 'Unsigned'}. ${vanNotes}`,
       recordedById: currentUser?.id || 'sys',
       recordedByName: currentUser?.name || 'Sales Production Officer',
       recordedByRole: 'sales_manager',
@@ -271,7 +281,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
       vehicleNumber: triVehicle,
       customerOrDriver: triDriver,
       paymentMethod: triPayment,
-      notes: `Loaded: ${triLoaded} | Sold: ${triSold} | Unsold Returned: ${triUnsold} | Damaged: ${triDamaged}. ${triNotes}`,
+      notes: `Loaded: ${triLoaded} | Sold: ${triSold} | Unsold Returned: ${triUnsold} | Damaged: ${triDamaged} | Dispatch Time: ${triDispatchTime} | Stock Officer Sign-off: ${triStockOfficer || 'Unsigned'}. ${triNotes}`,
       recordedById: currentUser?.id || 'sys',
       recordedByName: currentUser?.name || 'Sales Production Officer',
       recordedByRole: 'sales_manager',
@@ -894,6 +904,29 @@ export const SalesDailyRecordsModule: React.FC = () => {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Dispatch Time (Left Factory)</label>
+                  <input
+                    type="time"
+                    value={vanDispatchTime}
+                    onChange={(e) => setVanDispatchTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Stock Officer Sign-off</label>
+                  <input
+                    type="text"
+                    placeholder="Name of officer who verified the load-out..."
+                    value={vanStockOfficer}
+                    onChange={(e) => setVanStockOfficer(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Driver / Sales Representative</label>
                 <input
@@ -1057,6 +1090,29 @@ export const SalesDailyRecordsModule: React.FC = () => {
                     onChange={(e) => setTriVehicle(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono"
                     required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Dispatch Time (Left Factory)</label>
+                  <input
+                    type="time"
+                    value={triDispatchTime}
+                    onChange={(e) => setTriDispatchTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Stock Officer Sign-off</label>
+                  <input
+                    type="text"
+                    placeholder="Name of officer who verified the load-out..."
+                    value={triStockOfficer}
+                    onChange={(e) => setTriStockOfficer(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                   />
                 </div>
               </div>

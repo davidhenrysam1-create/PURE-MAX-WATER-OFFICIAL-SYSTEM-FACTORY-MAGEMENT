@@ -20,6 +20,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import L from 'leaflet';
 import { useApp } from '../../context/AppContext';
 import { socketService } from '../../services/socketService';
+import { localDateKey } from '../../utils/dateUtils';
 import { User } from '../../types';
 import {
   MapPin,
@@ -212,7 +213,10 @@ export const FleetMapModule: React.FC = () => {
   const watchIdRef = useRef<number | null>(null);
 
   // Today's date string
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  // Local-calendar day, not UTC: matches how sales records store their `date`
+  // and keeps the GPS sidebar's "bundles delivered today" in step with the
+  // dashboard's daily window (Issue #3 / #4).
+  const todayStr = useMemo(() => localDateKey(), []);
 
   // Compute daily water bundle sales count per staff member
   const staffSalesTodayMap = useMemo(() => {

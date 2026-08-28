@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { GPS_MAP_ROLES, BASIC_STAFF_ROLES } from '../../utils/roleAccess';
+import { GPS_MAP_ROLES, BASIC_STAFF_ROLES, DISPATCH_ROLES } from '../../utils/roleAccess';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -69,6 +69,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           : 'Daily Records & Production',
       icon: activeRole === 'sales_manager' ? ClipboardList : Factory,
       roles: ['developer', 'ceo', 'manager', 'second_manager', 'sales_manager', 'engineer'],
+    },
+    {
+      id: 'dispatch',
+      label: 'Bundle Dispatch & Audit',
+      icon: ClipboardList,
+      roles: DISPATCH_ROLES,
     },
     {
       id: 'attendance',

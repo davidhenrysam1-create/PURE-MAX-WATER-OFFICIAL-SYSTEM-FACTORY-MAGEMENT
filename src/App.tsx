@@ -27,7 +27,7 @@ import { GlobalToast } from './components/common/GlobalToast';
 import { WebRTCCallModal } from './components/call/WebRTCCallModal';
 import { InspectionBanner } from './components/common/InspectionBanner';
 import { socketService } from './services/socketService';
-import { canViewGpsMap } from './utils/roleAccess';
+import { canViewGpsMap, DISPATCH_ROLES } from './utils/roleAccess';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface ErrorBoundaryProps {
@@ -145,6 +145,15 @@ const AppContent: React.FC = () => {
           return <DashboardModule />;
         }
         return <ProductionModule />;
+      case 'dispatch':
+        // Issue #3 — "Bundle Dispatch & Sales Audit" is spec'd as accessible to
+        // BOTH Production Sales Officers and Managers. It previously lived only
+        // behind the 'production' tab, which App.tsx routes to ProductionModule
+        // for everyone except sales_manager, so Managers could never reach it.
+        if (!DISPATCH_ROLES.includes(activeRole)) {
+          return <DashboardModule />;
+        }
+        return <SalesDailyRecordsModule />;
       case 'attendance':
         return <AttendanceModule />;
       case 'expenses':

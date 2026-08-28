@@ -38,6 +38,17 @@ export const GPS_MAP_ROLES: UserRole[] = [
   'engineer',
 ];
 
+/**
+ * Roles allowed to open the Bundle Dispatch & Sales Audit module (Issue #3).
+ * Production Sales Officers and Managers, per the spec.
+ */
+export const DISPATCH_ROLES: UserRole[] = [
+  'developer',
+  'manager',
+  'second_manager',
+  'sales_manager',
+];
+
 /** Roles allowed to record sales. */
 export const SALES_ENTRY_ROLES: UserRole[] = [
   'developer',
