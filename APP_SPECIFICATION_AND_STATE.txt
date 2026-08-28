@@ -660,6 +660,17 @@ ISSUE #7 — LIVE HARDWARE GPS FLEET TRACKING & ACCESS CONTROL  [FIXED]
 - All GeolocationPositionError codes handled. Only PERMISSION_DENIED was handled
   before, so TIMEOUT and POSITION_UNAVAILABLE — the two most common phone
   failures — failed silently with no marker and no explanation.
+- *** FOLLOW-UP (found by re-reading the committed code, not by testing) ***
+  The fix above was initially INEFFECTIVE. It gated the Google SDK behind
+  `if (!GOOGLE_MAPS_API_KEY && !FALLBACK_GOOGLE_MAPS_KEY)`, but
+  FALLBACK_GOOGLE_MAPS_KEY was a non-empty string literal, so the guard could
+  never fire and Google still booted by default. The literal has been deleted;
+  Leaflet is now genuinely the default.
+  *** SECURITY — ACTION REQUIRED BY THE OWNER ***
+  That hard-coded key (AIzaSy...) is present in this repository's git history.
+  Anyone who cloned the repo can read and use it, and it bills to its owner's
+  Google Cloud account. It must be REVOKED in the Google Cloud console. Supply
+  your own key via VITE_GOOGLE_MAPS_API_KEY instead.
 - Map containers already carried `min-height: 550px` / `height: 100%` and the
   `google.maps.event.trigger(map,'resize')` + `invalidateSize()` calls; verified
   and left intact.
@@ -837,3 +848,19 @@ class-bound selectors.
   pushes. It was used only through a git credential helper and was never written
   to any file in the repository. It should be REVOKED and re-issued now that the
   work is pushed.
+
+--------------------------------------------------------------------------------
+LATE ADDITION (same session) — HARD-CODED GOOGLE MAPS KEY REMOVED
+--------------------------------------------------------------------------------
+On a final read-through of the committed code, the Issue #7 map-engine fix was
+found to be ineffective: `FALLBACK_GOOGLE_MAPS_KEY` was a non-empty string
+literal, so the `if (!GOOGLE_MAPS_API_KEY && !FALLBACK_GOOGLE_MAPS_KEY)` guard
+that was supposed to fall back to Leaflet could never fire. The map still
+booted Google by default on a hard-coded credential.
+The literal is now deleted. Leaflet/OpenStreetMap is genuinely the default and
+requires no key or billing account; set VITE_GOOGLE_MAPS_API_KEY to opt into
+Google.
+SECURITY: that key is in the repo's git history and MUST be revoked in the
+Google Cloud console by the owner.
+FILE: src/components/fleet/FleetMapModule.tsx
+COMMIT: b1f2468
