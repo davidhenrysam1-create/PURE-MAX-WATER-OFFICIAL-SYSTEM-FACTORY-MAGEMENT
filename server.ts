@@ -1106,25 +1106,44 @@ app.get('/api/sales', async (req: Request, res: Response) => {
   try {
     const records = await db.select().from(salesRecords).orderBy(desc(salesRecords.id));
     res.json(
-      records.map((s) => ({
-        id: `sls-${s.id}`,
-        receiptNumber: s.invoiceNumber,
-        date: s.date,
-        category: (s.productType.includes('Tricycle')
-          ? 'Tricycle Sales'
-          : s.productType.includes('Van')
-          ? 'Van Sales'
-          : 'Factory Sales') as any,
-        bundleQuantity: s.quantityBags,
-        unitPriceLe: s.unitPriceLe,
-        totalAmountLe: s.totalAmountLe,
-        customerOrDriver: s.customerName,
-        recordedById: 'system',
-        recordedByName: s.staffName,
-        recordedByRole: 'sales_manager' as const,
-        notes: `${s.customerPhone || ''} ${s.customerAddress || ''}`,
-        createdAt: s.createdAt?.toISOString() || new Date().toISOString(),
-      }))
+      records.map((s) => {
+        // Legacy rows (created before the `category` column existed) fall back
+        // to substring-sniffing productType; new rows always have category set.
+        const category =
+          s.category ||
+          (s.productType.includes('Tricycle')
+            ? 'Tricycle Sales'
+            : s.productType.includes('Van')
+            ? 'Van Sales'
+            : s.productType.includes('Wholesale')
+            ? 'Wholesale Orders'
+            : s.productType.includes('Damaged')
+            ? 'Damaged Bundles'
+            : 'Factory Sales');
+        return {
+          id: `sls-${s.id}`,
+          receiptNumber: s.invoiceNumber,
+          date: s.date,
+          category: category as any,
+          bundleQuantity: s.quantityBags,
+          unitPriceLe: s.unitPriceLe,
+          totalAmountLe: s.totalAmountLe,
+          amountPaidLe: s.amountPaidLe,
+          balanceLe: s.balanceLe,
+          paymentMethod: s.paymentMethod,
+          paymentStatus: s.paymentStatus,
+          vehicleNumber: s.vehicleNumber || undefined,
+          loadedBundles: s.loadedBundles ?? undefined,
+          unsoldBundles: s.unsoldBundles ?? undefined,
+          damagedLosses: s.damagedLosses ?? undefined,
+          customerOrDriver: s.customerName,
+          recordedById: 'system',
+          recordedByName: s.staffName,
+          recordedByRole: 'sales_manager' as const,
+          notes: `${s.customerPhone || ''} ${s.customerAddress || ''}`,
+          createdAt: s.createdAt?.toISOString() || new Date().toISOString(),
+        };
+      })
     );
   } catch (err: any) {
     console.error('Sales fetch error:', err);
@@ -1140,6 +1159,23 @@ app.post('/api/sales', async (req: Request, res: Response) => {
     const unitPrice = Number(data.unitPriceLe || 18);
     const total = Number(data.totalAmountLe || qty * unitPrice);
 
+    // Actual cash/payment collected. Defaults to the full total for record types
+    // that don't do a separate reconciliation step (Factory/Wholesale/Damaged),
+    // but Van/Tricycle dispatch sends the real amount the driver handed in —
+    // which can legitimately be less than `total` if there's a shortfall.
+    const amountPaid = data.amountPaidLe !== undefined ? Number(data.amountPaidLe) : total;
+    const balance = Math.round((total - amountPaid) * 100) / 100;
+
+    let paymentStatus = 'Paid in Full';
+    if (balance > 0) {
+      paymentStatus =
+        data.category === 'Van Sales' || data.category === 'Tricycle Sales'
+          ? 'Cash Shortfall'
+          : 'Partial / Credit Outstanding';
+    } else if (balance < 0) {
+      paymentStatus = 'Overpaid';
+    }
+
     const inserted = await db
       .insert(salesRecords)
       .values({
@@ -1148,20 +1184,41 @@ app.post('/api/sales', async (req: Request, res: Response) => {
         customerPhone: data.customerPhone || '+232 76 000 000',
         customerAddress: data.customerAddress || 'Factory Gate Outlet, Freetown',
         productType: data.category || 'Factory Direct Mineral Water Bundles',
+        category: data.category || 'Factory Sales',
         quantityBags: qty,
         unitPriceLe: unitPrice,
         totalAmountLe: total,
-        amountPaidLe: total,
-        balanceLe: 0,
-        paymentMethod: 'Cash / Mobile Money',
-        paymentStatus: 'Paid in Full',
+        amountPaidLe: amountPaid,
+        balanceLe: balance,
+        paymentMethod: data.paymentMethod || 'Cash / Mobile Money',
+        paymentStatus,
         deliveryType: data.category || 'Direct Outlet',
+        vehicleNumber: data.vehicleNumber || null,
+        loadedBundles: data.loadedBundles !== undefined ? Number(data.loadedBundles) : null,
+        unsoldBundles: data.unsoldBundles !== undefined ? Number(data.unsoldBundles) : null,
+        damagedLosses: data.damagedLosses !== undefined ? Number(data.damagedLosses) : null,
         staffName: data.recordedByName || 'Mariama Turay',
         date: data.date || new Date().toISOString().slice(0, 10),
       })
       .returning();
     if (inserted[0]) {
       broadcastDbChange('sales', 'create', inserted[0]);
+      // Flag cash shortfalls to Managers/Developers in real time, per spec.
+      if (balance > 0 && (data.category === 'Van Sales' || data.category === 'Tricycle Sales')) {
+        try {
+          await db.insert(notifications).values({
+            userId: null,
+            category: 'MANAGER',
+            targetRole: 'manager',
+            title: '⚠️ Cash Shortfall Detected',
+            message: `${data.category} dispatch (${data.vehicleNumber || 'unknown vehicle'}) recorded by ${data.recordedByName || 'a staff member'} is short by SLE ${balance.toLocaleString()}.`,
+            type: 'sales',
+            linkTab: 'sales',
+          });
+        } catch (notifyErr) {
+          console.error('Shortfall notification error:', notifyErr);
+        }
+      }
     }
     res.json(inserted[0]);
   } catch (err: any) {

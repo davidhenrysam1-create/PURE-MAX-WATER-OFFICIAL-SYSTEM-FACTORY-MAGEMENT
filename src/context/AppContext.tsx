@@ -1709,12 +1709,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       customerName: record.customerOrDriver,
       customerPhone: record.customerPhone || '',
       productType: record.category,
+      category: record.category,
       quantityBags: record.bundleQuantity,
       unitPriceLe: record.unitPriceLe,
       totalAmountLe: record.totalAmountLe,
+      // Actual cash/payment collected — defaults to the full total when the
+      // caller doesn't do a separate reconciliation step (e.g. factory-gate
+      // walk-in sales). Van/Tricycle dispatch passes the real amount handed
+      // in, which the server uses to detect and flag a shortfall.
+      amountPaidLe: record.amountPaidLe ?? record.totalAmountLe,
       paymentMethod: record.paymentMethod || 'cash',
-      paymentStatus: 'Completed',
+      vehicleNumber: record.vehicleNumber,
+      loadedBundles: record.loadedBundles,
+      unsoldBundles: record.unsoldBundles,
+      damagedLosses: record.damagedLosses,
       staffName: record.recordedByName || currentUser?.name || 'Sales Staff',
+      recordedByName: record.recordedByName || currentUser?.name || 'Sales Staff',
       date: record.date,
     });
 

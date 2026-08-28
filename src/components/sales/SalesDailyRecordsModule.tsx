@@ -43,6 +43,7 @@ import {
   ChevronRight,
   ShieldCheck,
   X,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const SalesDailyRecordsModule: React.FC = () => {
@@ -97,6 +98,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
   const [vanDamaged, setVanDamaged] = useState<number>(5);
   const [vanUnitPrice, setVanUnitPrice] = useState<number>(12000);
   const [vanPayment, setVanPayment] = useState<'cash' | 'orange_money' | 'bank_transfer'>('cash');
+  const [vanCashCollected, setVanCashCollected] = useState<number | ''>('');
   const [vanNotes, setVanNotes] = useState('');
 
   // 3. Tricycle Sales Form State
@@ -109,6 +111,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
   const [triDamaged, setTriDamaged] = useState<number>(2);
   const [triUnitPrice, setTriUnitPrice] = useState<number>(12000);
   const [triPayment, setTriPayment] = useState<'cash' | 'orange_money' | 'bank_transfer'>('cash');
+  const [triCashCollected, setTriCashCollected] = useState<number | ''>('');
   const [triNotes, setTriNotes] = useState('');
 
   // 4. Wholesale Form State
@@ -238,6 +241,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
       damagedLosses: vanDamaged,
       unitPriceLe: vanUnitPrice,
       totalAmountLe: totalAmount,
+      amountPaidLe: vanCashCollected === '' ? totalAmount : vanCashCollected,
       vehicleNumber: vanVehicle,
       customerOrDriver: vanDriver,
       paymentMethod: vanPayment,
@@ -248,6 +252,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
     });
     setShowAddVanModal(false);
     setVanNotes('');
+    setVanCashCollected('');
   };
 
   const handleSaveTriSale = (e: React.FormEvent) => {
@@ -262,6 +267,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
       damagedLosses: triDamaged,
       unitPriceLe: triUnitPrice,
       totalAmountLe: totalAmount,
+      amountPaidLe: triCashCollected === '' ? totalAmount : triCashCollected,
       vehicleNumber: triVehicle,
       customerOrDriver: triDriver,
       paymentMethod: triPayment,
@@ -272,6 +278,7 @@ export const SalesDailyRecordsModule: React.FC = () => {
     });
     setShowAddTriModal(false);
     setTriNotes('');
+    setTriCashCollected('');
   };
 
   const handleSaveWholesale = (e: React.FormEvent) => {
@@ -966,11 +973,35 @@ export const SalesDailyRecordsModule: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800/80 flex items-center justify-between text-xs">
-                <span className="font-bold text-blue-800 dark:text-blue-300">Reconciled Sales Revenue:</span>
+                <span className="font-bold text-blue-800 dark:text-blue-300">Expected Sales Revenue:</span>
                 <span className="font-mono font-black text-base text-blue-700 dark:text-blue-400">
                   SLE {(vanSold * vanUnitPrice).toLocaleString()}
                 </span>
               </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Actual Cash Collected From Driver (SLE)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={vanCashCollected}
+                  onChange={(e) => setVanCashCollected(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder={String(vanSold * vanUnitPrice)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono font-bold"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Leave blank if the driver handed in the full expected amount.</p>
+              </div>
+
+              {vanCashCollected !== '' && vanCashCollected < vanSold * vanUnitPrice && (
+                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 flex items-center justify-between text-xs animate-pulse">
+                  <span className="font-bold text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Cash Shortfall Detected:
+                  </span>
+                  <span className="font-mono font-black text-base text-rose-600 dark:text-rose-400">
+                    SLE {(vanSold * vanUnitPrice - vanCashCollected).toLocaleString()}
+                  </span>
+                </div>
+              )}
 
               <div className="flex gap-2 pt-2">
                 <button
@@ -1109,11 +1140,35 @@ export const SalesDailyRecordsModule: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/50 border border-teal-200 dark:border-teal-800/80 flex items-center justify-between text-xs">
-                <span className="font-bold text-teal-800 dark:text-teal-300">Tricycle Sales Total:</span>
+                <span className="font-bold text-teal-800 dark:text-teal-300">Expected Sales Total:</span>
                 <span className="font-mono font-black text-base text-teal-700 dark:text-teal-400">
                   SLE {(triSold * triUnitPrice).toLocaleString()}
                 </span>
               </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Actual Cash Collected From Driver (SLE)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={triCashCollected}
+                  onChange={(e) => setTriCashCollected(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder={String(triSold * triUnitPrice)}
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-mono font-bold"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Leave blank if the driver handed in the full expected amount.</p>
+              </div>
+
+              {triCashCollected !== '' && triCashCollected < triSold * triUnitPrice && (
+                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 flex items-center justify-between text-xs animate-pulse">
+                  <span className="font-bold text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Cash Shortfall Detected:
+                  </span>
+                  <span className="font-mono font-black text-base text-rose-600 dark:text-rose-400">
+                    SLE {(triSold * triUnitPrice - triCashCollected).toLocaleString()}
+                  </span>
+                </div>
+              )}
 
               <div className="flex gap-2 pt-2">
                 <button

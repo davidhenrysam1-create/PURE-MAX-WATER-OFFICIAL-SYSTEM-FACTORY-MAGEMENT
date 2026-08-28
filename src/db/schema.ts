@@ -59,14 +59,19 @@ export const salesRecords = pgTable('sales_records', {
   customerPhone: text('customer_phone').notNull(),
   customerAddress: text('customer_address').notNull(),
   productType: text('product_type').notNull(),
+  category: text('category'), // Factory Sales | Van Sales | Tricycle Sales | Wholesale Orders | Damaged Bundles
   quantityBags: integer('quantity_bags').notNull(),
   unitPriceLe: doublePrecision('unit_price_le').notNull(),
   totalAmountLe: doublePrecision('total_amount_le').notNull(),
-  amountPaidLe: doublePrecision('amount_paid_le').notNull(),
-  balanceLe: doublePrecision('balance_le').notNull(),
+  amountPaidLe: doublePrecision('amount_paid_le').notNull(), // actual cash/payment collected
+  balanceLe: doublePrecision('balance_le').notNull(),        // totalAmountLe - amountPaidLe (>0 = shortfall/credit owed)
   paymentMethod: text('payment_method').notNull(),
   paymentStatus: text('payment_status').notNull(),
   deliveryType: text('delivery_type').notNull(),
+  vehicleNumber: text('vehicle_number'),   // e.g. PM-TRC-002, for Van/Tricycle dispatch
+  loadedBundles: integer('loaded_bundles'), // bundles loaded at factory before dispatch
+  unsoldBundles: integer('unsold_bundles'), // bundles returned unsold
+  damagedLosses: integer('damaged_losses'), // bundles damaged/lost in transit
   staffName: text('staff_name').notNull(),
   date: text('date').notNull(),
   createdAt: timestamp('created_at').defaultNow(),
