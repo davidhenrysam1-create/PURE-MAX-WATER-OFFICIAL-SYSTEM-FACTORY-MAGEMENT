@@ -24,6 +24,36 @@ export interface WebRTCCallState {
   isMuted: boolean;
   isVideoOff: boolean;
   callDurationSeconds: number;
+  /**
+   * Set when the browser refused or could not open the mic/camera. Surfaced in
+   * the call UI so the user knows exactly why there is no audio, instead of a
+   * silently dead call (Issue #11).
+   */
+  mediaError?: string | null;
+  /** True while we are (re)negotiating the peer connection. */
+  isConnecting?: boolean;
+}
+
+/** Human-readable message for a getUserMedia / getUserMedia-adjacent failure. */
+function describeMediaError(err: unknown): string {
+  const name = (err as { name?: string })?.name || '';
+  switch (name) {
+    case 'NotAllowedError':
+    case 'PermissionDeniedError':
+      return 'Microphone/camera permission was blocked. Allow access in your browser address bar, then press Retry.';
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'No microphone or camera was found on this device.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return 'The microphone or camera is already in use by another application.';
+    case 'OverconstrainedError':
+      return 'No device matches the requested audio/video settings.';
+    case 'SecurityError':
+      return 'Media access was blocked by the browser. This page must be served over HTTPS or localhost.';
+    default:
+      return 'Could not open the microphone/camera. Press Retry to try again.';
+  }
 }
 
 class SocketService {
@@ -33,6 +63,14 @@ class SocketService {
   private remoteStream: MediaStream | null = null;
   private currentCall: WebRTCCallState | null = null;
   private callTimer: NodeJS.Timeout | null = null;
+  /**
+   * ICE candidates can arrive before the remote description has been applied
+   * (the signalling channel is faster than the offer/answer round trip).
+   * Calling addIceCandidate() too early throws InvalidStateError and silently
+   * drops that candidate, which shows up as a call that connects but carries no
+   * media. They are buffered here and flushed after setRemoteDescription().
+   */
+  private pendingIceCandidates: RTCIceCandidateInit[] = [];
 
   // Listeners
   private onCallStateChangeCallbacks: ((state: WebRTCCallState | null) => void)[] = [];
@@ -183,6 +221,7 @@ class SocketService {
       if (this.currentCall) {
         this.currentCall.isConnected = true;
         this.currentCall.isOutgoing = false;
+        this.currentCall.isConnecting = false;
         this.startCallTimer();
         this.notifyCallState();
 
@@ -217,6 +256,8 @@ class SocketService {
       if (signal.type === 'offer') {
         if (this.peerConnection) {
           await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+          await this.flushPendingIceCandidates();
+
           const answer = await this.peerConnection.createAnswer();
           await this.peerConnection.setLocalDescription(answer);
           this.socket?.emit('call:signal', {
@@ -229,9 +270,16 @@ class SocketService {
       } else if (signal.type === 'answer') {
         if (this.peerConnection && this.peerConnection.signalingState !== 'stable') {
           await this.peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+          await this.flushPendingIceCandidates();
         }
       } else if (signal.candidate) {
         if (this.peerConnection) {
+          // Candidates that land before the offer/answer is applied cannot be
+          // added yet — buffer them for flushPendingIceCandidates().
+          if (!this.peerConnection.remoteDescription) {
+            this.pendingIceCandidates.push(signal.candidate);
+            return;
+          }
           try {
             await this.peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
           } catch (e) {
@@ -252,11 +300,15 @@ class SocketService {
   ) {
     const callId = `call-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    // Open the mic/camera BEFORE signalling. If this fails we still place the
+    // call, but we publish the reason so the UI can offer a Retry button
+    // instead of leaving the user in a silent, one-way call.
+    let mediaError: string | null = null;
     try {
-      // Get User Media Stream (Microphone / Camera)
       this.localStream = await this.getUserMediaStream(callType === 'video');
     } catch (err) {
-      console.warn('Microphone/Camera permission denied, proceeding with simulated stream:', err);
+      console.warn('Microphone/Camera could not be opened for outgoing call:', err);
+      mediaError = describeMediaError(err);
     }
 
     this.currentCall = {
@@ -271,9 +323,16 @@ class SocketService {
       isMuted: false,
       isVideoOff: false,
       callDurationSeconds: 0,
+      mediaError,
+      isConnecting: true,
     };
 
-    soundEffects.startIncomingRingtone();
+    // Outgoing calls get a ring-back tone, not the receiver's urgent ring.
+    if (mediaError) {
+      soundEffects.playBusyTone();
+    } else {
+      soundEffects.startOutgoingRingtone();
+    }
     this.notifyCallState();
 
     // Emit call invite via Socket.IO
@@ -297,11 +356,15 @@ class SocketService {
     soundEffects.stopRingtone();
     soundEffects.playCallConnected();
 
+    this.currentCall.mediaError = null;
+    this.currentCall.isConnecting = true;
+
     try {
       this.localStream = await this.getUserMediaStream(this.currentCall.callType === 'video');
       this.currentCall.localStream = this.localStream;
     } catch (err) {
-      console.warn('Microphone/Camera access error:', err);
+      console.warn('Microphone/Camera access error on accept:', err);
+      this.currentCall.mediaError = describeMediaError(err);
     }
 
     this.currentCall.isConnected = true;
@@ -364,16 +427,35 @@ class SocketService {
     }
 
     if (this.peerConnection) {
+      // Detach handlers first so the teardown below cannot fire more callbacks.
+      this.peerConnection.onicecandidate = null;
+      this.peerConnection.ontrack = null;
+      this.peerConnection.onconnectionstatechange = null;
       this.peerConnection.close();
       this.peerConnection = null;
     }
 
+    this.pendingIceCandidates = [];
     this.remoteStream = null;
     this.currentCall = null;
 
-    if (notify) {
-      this.notifyCallState();
-    }
+    soundEffects.stopRingtone();
+
+    // THE AUTO-DISMISS FIX (Issue #11).
+    //
+    // The old code read:
+    //     if (notify) { this.notifyCallState(); }
+    // and the socket handlers for `call:ended` / `call:rejected` call
+    // endCallInternal(false). So when the OTHER party hung up, `currentCall`
+    // was nulled out but no state change was ever published — the receiver's
+    // React overlay kept rendering the stale call object and stayed on screen
+    // until the page was reloaded. Exactly the reported symptom.
+    //
+    // The UI must always be told that the call is over, regardless of whether
+    // we are the one emitting the network signal. `notify` now only controls
+    // the outgoing `call:end` emit (handled by endCall()), never the local
+    // state broadcast.
+    this.notifyCallState();
   }
 
   /**
@@ -406,14 +488,148 @@ class SocketService {
     return false;
   }
 
+  /**
+   * Open the local mic / camera.
+   *
+   * The original implementation made exactly ONE attempt with a fixed
+   * constraint set. Any failure (camera busy, a laptop with no webcam, a
+   * browser that rejects `facingMode`, an insecure origin) threw, the caller
+   * swallowed the error into console.warn, and the call proceeded with
+   * `localStream === null`. Because addTrack() is never called with a null
+   * stream, the peer connection then negotiates with NO media at all and both
+   * sides sit in a silent call — the "mic and video don't transmit" report.
+   *
+   * This now walks a ladder of progressively relaxed constraints so a video
+   * call can still connect as audio-only, and it only throws once every rung
+   * has genuinely failed.
+   */
   private async getUserMediaStream(video: boolean): Promise<MediaStream> {
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-      return await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: video ? { width: { ideal: 640 }, height: { ideal: 480 } } : false,
-      });
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw Object.assign(
+        new Error('navigator.mediaDevices.getUserMedia is not available in this browser.'),
+        { name: 'NotSupportedError' }
+      );
     }
-    throw new Error('navigator.mediaDevices.getUserMedia not available');
+
+    // Every modern browser hides mediaDevices entirely on insecure origins.
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      throw Object.assign(
+        new Error('Media capture requires a secure context (HTTPS or localhost).'),
+        { name: 'SecurityError' }
+      );
+    }
+
+    const voiceConstraints: MediaTrackConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    const attempts: MediaStreamConstraints[] = video
+      ? [
+          // 1. Ideal: front camera at VGA with full voice processing.
+          { audio: voiceConstraints, video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } },
+          // 2. Drop facingMode / resolution requests — some desktop browsers
+          //    reject facingMode outright with OverconstrainedError.
+          { audio: true, video: true },
+          // 3. No camera available or busy — still place the call as voice.
+          { audio: true, video: false },
+        ]
+      : [
+          { audio: voiceConstraints, video: false },
+          { audio: true, video: false },
+        ];
+
+    let lastErr: unknown = null;
+
+    for (const constraints of attempts) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (stream && (stream.getAudioTracks().length > 0 || stream.getVideoTracks().length > 0)) {
+          return stream;
+        }
+        // Defensive: a stream with zero usable tracks is not usable.
+        stream?.getTracks().forEach((t) => t.stop());
+      } catch (err) {
+        lastErr = err;
+        console.warn('getUserMedia attempt failed:', constraints, err);
+      }
+    }
+
+    throw lastErr ?? new Error('No usable microphone or camera was found.');
+  }
+
+  /**
+   * Re-attempt local media capture while a call is already live, then hot-swap
+   * the tracks into the existing peer connection. Backs the "Retry" button in
+   * the call UI: users routinely click "Block" on the first permission prompt,
+   * and previously there was no way to recover without hanging up.
+   */
+  public async retryLocalMedia(): Promise<boolean> {
+    if (!this.currentCall) return false;
+
+    this.currentCall.mediaError = null;
+    this.notifyCallState();
+
+    try {
+      const stream = await this.getUserMediaStream(this.currentCall.callType === 'video');
+
+      // Release whatever the previous attempt left open.
+      if (this.localStream && this.localStream !== stream) {
+        this.localStream.getTracks().forEach((t) => t.stop());
+      }
+
+      this.localStream = stream;
+      this.currentCall.localStream = stream;
+      this.currentCall.isVideoOff = stream.getVideoTracks().length === 0;
+      this.currentCall.isMuted = false;
+      this.currentCall.mediaError = null;
+
+      if (this.peerConnection && this.peerConnection.signalingState !== 'closed') {
+        const senders = this.peerConnection.getSenders();
+        const audioTrack = stream.getAudioTracks()[0];
+        const videoTrack = stream.getVideoTracks()[0];
+
+        // Replace matching senders in place, add anything the peer connection
+        // does not already carry.
+        for (const sender of senders) {
+          if (sender.track?.kind === 'audio' && audioTrack) {
+            await sender.replaceTrack(audioTrack);
+          } else if (sender.track?.kind === 'video' && videoTrack) {
+            await sender.replaceTrack(videoTrack);
+          }
+        }
+
+        const hasAudioSender = senders.some((s) => s.track?.kind === 'audio');
+        const hasVideoSender = senders.some((s) => s.track?.kind === 'video');
+
+        if (audioTrack && !hasAudioSender) this.peerConnection.addTrack(audioTrack, stream);
+        if (videoTrack && !hasVideoSender) this.peerConnection.addTrack(videoTrack, stream);
+
+        // Renegotiate so the peer actually sees the new tracks.
+        try {
+          const offer = await this.peerConnection.createOffer();
+          await this.peerConnection.setLocalDescription(offer);
+          this.socket?.emit('call:signal', {
+            callId: this.currentCall.callId,
+            targetUserId: this.currentCall.targetUser.id,
+            signal: offer,
+          });
+        } catch (renegErr) {
+          console.warn('Renegotiation after media retry failed:', renegErr);
+        }
+      }
+
+      this.notifyCallState();
+      return true;
+    } catch (err) {
+      console.warn('Media retry failed:', err);
+      if (this.currentCall) {
+        this.currentCall.mediaError = describeMediaError(err);
+        this.notifyCallState();
+      }
+      return false;
+    }
   }
 
   private async createPeerConnection(targetUserId: string) {
@@ -434,12 +650,47 @@ class SocketService {
       });
     }
 
+    // Remote media.
+    //
+    // The old handler only looked at `event.streams[0]`. Firefox (and Chrome in
+    // some renegotiation paths) fires ontrack with an empty `streams` array and
+    // populates `event.track` instead, so this.remoteStream stayed null, the
+    // <video> element never received a srcObject, and the user saw the
+    // "Connecting camera stream..." placeholder forever. We now build the
+    // stream ourselves from event.track when no stream is supplied.
     this.peerConnection.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0];
+      let stream = event.streams?.[0];
+
+      if (!stream) {
+        stream = this.remoteStream ?? new MediaStream();
+        if (event.track && !stream.getTrackById(event.track.id)) {
+          stream.addTrack(event.track);
+        }
+      }
+
+      this.remoteStream = stream;
+
+      if (this.currentCall) {
+        this.currentCall.remoteStream = stream;
+        this.currentCall.isConnecting = false;
+        this.notifyCallState();
+      }
+    };
+
+    // Surface transport-level failures instead of letting the call hang.
+    this.peerConnection.onconnectionstatechange = () => {
+      const state = this.peerConnection?.connectionState;
+      if (!state) return;
+
+      if (state === 'failed' || state === 'disconnected') {
+        console.warn(`WebRTC connection ${state}.`);
         if (this.currentCall) {
-          this.currentCall.remoteStream = this.remoteStream;
+          this.currentCall.isConnecting = state === 'disconnected';
           this.notifyCallState();
+        }
+        if (state === 'failed') {
+          soundEffects.playBusyTone();
+          this.endCallInternal(true);
         }
       }
     };
@@ -453,6 +704,22 @@ class SocketService {
         });
       }
     };
+  }
+
+  /** Flush any ICE candidates that arrived before the remote description. */
+  private async flushPendingIceCandidates() {
+    if (!this.peerConnection || this.pendingIceCandidates.length === 0) return;
+
+    const queued = this.pendingIceCandidates;
+    this.pendingIceCandidates = [];
+
+    for (const candidate of queued) {
+      try {
+        await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn('Error flushing queued ICE candidate:', err);
+      }
+    }
   }
 
   private async createOffer(targetUserId: string) {

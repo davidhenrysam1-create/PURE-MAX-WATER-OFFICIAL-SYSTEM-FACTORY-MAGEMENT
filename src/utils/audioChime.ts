@@ -173,6 +173,41 @@ class SoundEffectsEngine {
   }
 
   /**
+   * Start looping OUTGOING (dial / ring-back) tone.
+   *
+   * Previously the caller heard `startIncomingRingtone()` — the same urgent
+   * dual-tone cadence the receiver hears. Users could not tell whether their
+   * own phone was ringing or the other person's, which made outgoing calls
+   * feel like an incoming call was arriving. A standard ring-back tone
+   * (440 Hz + 350 Hz, 1s on / 3s off) is used instead.
+   */
+  public startOutgoingRingtone() {
+    this.unlockAudio();
+    this.stopRingtone();
+    if (this.isMuted) return;
+
+    const playRingBack = () => {
+      if (this.isMuted) return;
+      // North-American style ring-back: 440 Hz + 350 Hz.
+      this.playTone(440, 'sine', 0.9, 0.16, 0);
+      this.playTone(350, 'sine', 0.9, 0.16, 0);
+    };
+
+    playRingBack();
+    this.ringtoneInterval = setInterval(playRingBack, 4000);
+  }
+
+  /**
+   * Short "line busy / unavailable" double beep, played when a call cannot be
+   * established (peer rejected, or the media devices could not be opened).
+   */
+  public playBusyTone() {
+    this.unlockAudio();
+    this.playTone(480, 'square', 0.25, 0.14, 0);
+    this.playTone(480, 'square', 0.25, 0.14, 0.35);
+  }
+
+  /**
    * Stop active phone ringtone
    */
   public stopRingtone() {

@@ -2,10 +2,36 @@
  * WebRTC 1-to-1 Voice & Video Call Overlay Component
  * Provides real-time audio/video interface, call duration timer,
  * microphone mute, camera toggle, and incoming call banner.
+ *
+ * Issue #11 refactor notes
+ * ------------------------
+ * 1. REMOTE AUDIO WAS NEVER PLAYED.
+ *    The remote MediaStream was only ever bound to a <video> element, which
+ *    exists solely when callType === 'video'. For a plain voice call there was
+ *    no media element at all, so the incoming audio track had nowhere to be
+ *    rendered — both sides could "connect" and hear nothing. A hidden
+ *    <audio autoPlay> element is now always mounted and carries the remote
+ *    stream for every call type.
+ *
+ * 2. AUTO-DISMISS.
+ *    When the remote party hung up, socketService.endCallInternal(false) never
+ *    published a state change, so this overlay stayed on screen until a page
+ *    reload. Fixed in socketService (it now always notifies); this component
+ *    also resets its local view state whenever the call goes away.
+ *
+ * 3. MEDIA FAILURE IS VISIBLE.
+ *    If getUserMedia was blocked or no device exists, the call used to proceed
+ *    silently with no tracks. The error is now surfaced with a Retry button
+ *    wired to socketService.retryLocalMedia().
+ *
+ * 4. LAYERING.
+ *    Rendered through a portal at z-[400] so it sits above the sticky header
+ *    (z-50) and other modals (z-[200]).
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { Portal } from '../common/Portal';
 import { socketService, WebRTCCallState } from '../../services/socketService';
 import {
   Phone,
@@ -14,39 +40,84 @@ import {
   VideoOff,
   Mic,
   MicOff,
-  User,
-  ShieldCheck,
+
+
   Maximize2,
   Minimize2,
   Volume2,
+  AlertTriangle,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
 
-export const WebRTCCallModal: React.FC = () => {
+
+export const WebRTCCallModal = () => {
   const { currentUser } = useApp();
   const [callState, setCallState] = useState<WebRTCCallState | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isRetryingMedia, setIsRetryingMedia] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Plays the remote party's voice. Required for voice-only calls, where no
+  // <video> element exists to render the audio track.
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     // Listen to call state changes from socketService
     const unsubscribe = socketService.onCallStateChange((state) => {
       setCallState(state);
+      // Reset the view whenever a call ends so the next one opens expanded.
+      if (!state) {
+        setIsMinimized(false);
+        setIsRetryingMedia(false);
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // Bind media streams to HTML Video elements
+  // Bind media streams to the HTML media elements.
   useEffect(() => {
-    if (callState?.localStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = callState.localStream;
+    const el = localVideoRef.current;
+    if (el) {
+      if (el.srcObject !== callState?.localStream) {
+        el.srcObject = callState?.localStream ?? null;
+      }
+      if (callState?.localStream) {
+        el.play().catch(() => {
+          /* autoplay may be blocked until a user gesture; harmless */
+        });
+      }
     }
-  }, [callState?.localStream]);
+  }, [callState?.localStream, callState?.callType, isMinimized]);
 
   useEffect(() => {
-    if (callState?.remoteStream && remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = callState.remoteStream;
+    const el = remoteVideoRef.current;
+    if (el) {
+      if (el.srcObject !== callState?.remoteStream) {
+        el.srcObject = callState?.remoteStream ?? null;
+      }
+      if (callState?.remoteStream) {
+        el.play().catch(() => {
+          /* autoplay may be blocked until a user gesture; harmless */
+        });
+      }
+    }
+  }, [callState?.remoteStream, callState?.callType, isMinimized]);
+
+  // Always keep the hidden audio sink in sync — this is what makes voice calls
+  // audible.
+  useEffect(() => {
+    const el = remoteAudioRef.current;
+    if (el) {
+      if (el.srcObject !== callState?.remoteStream) {
+        el.srcObject = callState?.remoteStream ?? null;
+      }
+      if (callState?.remoteStream) {
+        el.play().catch(() => {
+          /* autoplay may be blocked until a user gesture; harmless */
+        });
+      }
     }
   }, [callState?.remoteStream]);
 
@@ -58,214 +129,290 @@ export const WebRTCCallModal: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const handleRetryMedia = async () => {
+    setIsRetryingMedia(true);
+    try {
+      await socketService.retryLocalMedia();
+    } finally {
+      setIsRetryingMedia(false);
+    }
+  };
+
+  const hasLocalVideo = Boolean(callState.localStream?.getVideoTracks().length);
+
+  /** Shown above the controls whenever capture failed or is still negotiating. */
+  const mediaBanner = (compact = false) => {
+    if (callState.mediaError) {
+      return (
+        <div
+          className={`flex items-start gap-2.5 rounded-xl bg-amber-950/70 border border-amber-600/60 text-amber-100 ${
+            compact ? 'p-2 text-[10px]' : 'p-3 text-xs'
+          }`}
+          role="alert"
+        >
+          <AlertTriangle className={`${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'} text-amber-400 shrink-0 mt-0.5`} />
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">No microphone/camera in this call</p>
+            {!compact && <p className="text-amber-200/80 mt-0.5 leading-relaxed">{callState.mediaError}</p>}
+          </div>
+          <button
+            onClick={handleRetryMedia}
+            disabled={isRetryingMedia}
+            className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-bold text-[10px] flex items-center gap-1 transition cursor-pointer"
+          >
+            {isRetryingMedia ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3 h-3" />
+            )}
+            <span>Retry</span>
+          </button>
+        </div>
+      );
+    }
+
+    if (callState.isConnecting && callState.isConnected) {
+      return (
+        <div
+          className={`flex items-center gap-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300 ${
+            compact ? 'p-2 text-[10px]' : 'p-3 text-xs'
+          }`}
+        >
+          <Loader2 className={`${compact ? 'w-3 h-3' : 'w-4 h-4'} animate-spin text-indigo-400`} />
+          <span>Connecting media stream…</span>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
   // 1. INCOMING CALL BANNER / POPUP
   if (callState.isIncoming && !callState.isConnected) {
     return (
-      <div className="fixed inset-x-4 top-6 md:inset-x-auto md:right-8 md:top-8 z-[200] max-w-md w-full animate-bounce duration-700">
-        <div className="p-5 rounded-2xl bg-slate-900 text-white border-2 border-emerald-500 shadow-2xl shadow-emerald-950/60 backdrop-blur-xl flex flex-col gap-4">
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              {callState.targetUser.avatarUrl ? (
-                <img
-                  src={callState.targetUser.avatarUrl}
-                  alt={callState.targetUser.name}
-                  className="w-14 h-14 rounded-full object-cover border-2 border-emerald-400"
-                />
-              ) : (
-                <div className="w-14 h-14 rounded-full bg-emerald-950 border-2 border-emerald-400 flex items-center justify-center text-emerald-300 font-bold text-xl">
-                  {callState.targetUser.name.charAt(0)}
-                </div>
-              )}
-              <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] animate-pulse">
-                {callState.callType === 'video' ? <Video className="w-3 h-3 text-white" /> : <Phone className="w-3 h-3 text-white" />}
-              </span>
+      <Portal>
+        <div className="fixed inset-x-4 top-6 md:inset-x-auto md:right-8 md:top-8 z-[400] max-w-md w-full">
+          <div className="p-5 rounded-2xl bg-slate-900 text-white border-2 border-emerald-500 shadow-2xl shadow-emerald-950/60 backdrop-blur-xl flex flex-col gap-4 animate-pulse">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                {callState.targetUser.avatarUrl ? (
+                  <img
+                    src={callState.targetUser.avatarUrl}
+                    alt={callState.targetUser.name}
+                    className="w-14 h-14 rounded-full object-cover border-2 border-emerald-400"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-14 h-14 rounded-full bg-emerald-950 border-2 border-emerald-400 flex items-center justify-center text-emerald-300 font-bold text-xl">
+                    {callState.targetUser.name.charAt(0)}
+                  </div>
+                )}
+                <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-[10px] animate-pulse">
+                  {callState.callType === 'video' ? <Video className="w-3 h-3 text-white" /> : <Phone className="w-3 h-3 text-white" />}
+                </span>
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  Incoming Pure Max {callState.callType === 'video' ? 'Video Call' : 'Voice Call'}
+                </span>
+                <h4 className="text-base font-black truncate text-white">{callState.targetUser.name}</h4>
+                <p className="text-xs text-slate-300 capitalize">{callState.targetUser.role.replace('_', ' ')}</p>
+              </div>
             </div>
 
-            <div className="flex-1 min-w-0">
-              <span className="text-[10px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                Incoming Pure Max {callState.callType === 'video' ? 'Video Call' : 'Voice Call'}
-              </span>
-              <h4 className="text-base font-black truncate text-white">{callState.targetUser.name}</h4>
-              <p className="text-xs text-slate-300 capitalize">{callState.targetUser.role.replace('_', ' ')}</p>
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={() => socketService.rejectCall()}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition cursor-pointer"
+              >
+                <PhoneOff className="w-4 h-4" />
+                Decline
+              </button>
+
+              <button
+                onClick={() => socketService.acceptCall({ id: currentUser.id, name: currentUser.name })}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 transition cursor-pointer"
+              >
+                {callState.callType === 'video' ? <Video className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+                Accept Call
+              </button>
             </div>
-          </div>
-
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              onClick={() => socketService.rejectCall()}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition cursor-pointer"
-            >
-              <PhoneOff className="w-4 h-4" />
-              Decline
-            </button>
-
-            <button
-              onClick={() => socketService.acceptCall({ id: currentUser.id, name: currentUser.name })}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 transition cursor-pointer"
-            >
-              {callState.callType === 'video' ? <Video className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
-              Accept Call
-            </button>
           </div>
         </div>
-      </div>
+      </Portal>
     );
   }
 
   // 2. ACTIVE OR OUTGOING CALL OVERLAY
   return (
-    <div
-      className={`fixed z-[200] transition-all duration-300 ${
-        isMinimized
-          ? 'bottom-6 right-6 w-80 shadow-2xl rounded-2xl overflow-hidden border border-slate-700 bg-slate-900 text-white'
-          : 'inset-0 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md'
-      }`}
-    >
+    <Portal>
       <div
-        className={`w-full ${
+        className={`fixed z-[400] transition-all duration-300 ${
           isMinimized
-            ? 'p-4'
-            : 'max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-white flex flex-col justify-between'
+            ? 'bottom-6 right-6 w-80 shadow-2xl rounded-2xl overflow-hidden border border-slate-700 bg-slate-900 text-white'
+            : 'inset-0 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md'
         }`}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
-              Pure Max {callState.callType === 'video' ? 'Video Call' : 'Encrypted Voice Call'}
-            </span>
+        {/* Hidden audio sink — renders the remote voice for voice-only calls. */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
+        <div
+          className={`w-full ${
+            isMinimized
+              ? 'p-4'
+              : 'max-w-xl bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl text-white flex flex-col justify-between'
+          }`}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  callState.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400 animate-ping'
+                }`}
+              ></span>
+              <span className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
+                Pure Max {callState.callType === 'video' ? 'Video Call' : 'Encrypted Voice Call'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => setIsMinimized(!isMinimized)}
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+              title={isMinimized ? 'Expand' : 'Minimize'}
+            >
+              {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+            </button>
           </div>
 
-          <button
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-            title={isMinimized ? 'Expand' : 'Minimize'}
-          >
-            {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
-          </button>
-        </div>
+          {/* Video or Voice Canvas */}
+          {callState.callType === 'video' ? (
+            <div className="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center mb-4">
+              {/* Remote Video Stream */}
+              <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
 
-        {/* Video or Voice Canvas */}
-        {callState.callType === 'video' ? (
-          <div className="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center mb-4">
-            {/* Remote Video Stream */}
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
-            />
-
-            {!callState.remoteStream && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 gap-3">
-                <div className="w-20 h-20 rounded-full bg-indigo-950 border-2 border-indigo-500 flex items-center justify-center text-indigo-300 text-3xl font-extrabold">
-                  {callState.targetUser.name.charAt(0)}
-                </div>
-                <div className="text-center">
-                  <h4 className="font-bold text-base">{callState.targetUser.name}</h4>
-                  <p className="text-xs text-slate-400">
-                    {callState.isConnected ? 'Video connected' : 'Connecting camera stream...'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Local Video Picture-in-Picture */}
-            <div className="absolute bottom-3 right-3 w-32 aspect-video bg-slate-900 rounded-xl overflow-hidden border-2 border-slate-700 shadow-xl">
-              <video
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full object-cover ${callState.isVideoOff ? 'hidden' : 'block'}`}
-              />
-              {callState.isVideoOff && (
-                <div className="w-full h-full flex items-center justify-center bg-slate-800 text-[10px] text-slate-400">
-                  Camera Off
+              {!callState.remoteStream && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 gap-3">
+                  <div className="w-20 h-20 rounded-full bg-indigo-950 border-2 border-indigo-500 flex items-center justify-center text-indigo-300 text-3xl font-extrabold">
+                    {callState.targetUser.name.charAt(0)}
+                  </div>
+                  <div className="text-center">
+                    <h4 className="font-bold text-base">{callState.targetUser.name}</h4>
+                    <p className="text-xs text-slate-400">
+                      {callState.isConnected ? 'Waiting for remote camera…' : 'Connecting camera stream...'}
+                    </p>
+                  </div>
                 </div>
               )}
-            </div>
-          </div>
-        ) : (
-          <div className="py-8 flex flex-col items-center justify-center text-center space-y-4">
-            <div className="relative">
-              {callState.targetUser.avatarUrl ? (
-                <img
-                  src={callState.targetUser.avatarUrl}
-                  alt={callState.targetUser.name}
-                  className="w-24 h-24 rounded-full object-cover border-4 border-indigo-500 shadow-xl"
+
+              {/* Local Video Picture-in-Picture */}
+              <div className="absolute bottom-3 right-3 w-32 aspect-video bg-slate-900 rounded-xl overflow-hidden border-2 border-slate-700 shadow-xl">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`w-full h-full object-cover ${callState.isVideoOff || !hasLocalVideo ? 'hidden' : 'block'}`}
                 />
-              ) : (
-                <div className="w-24 h-24 rounded-full bg-indigo-950 border-4 border-indigo-500 flex items-center justify-center text-indigo-300 text-4xl font-black shadow-xl">
-                  {callState.targetUser.name.charAt(0)}
-                </div>
-              )}
-              {callState.isConnected && (
-                <span className="absolute bottom-0 right-0 p-1.5 rounded-full bg-emerald-500 border-2 border-slate-900">
-                  <Volume2 className="w-4 h-4 text-white animate-pulse" />
-                </span>
-              )}
-            </div>
-
-            <div>
-              <h3 className="text-xl font-extrabold text-white">{callState.targetUser.name}</h3>
-              <p className="text-xs text-indigo-300 font-mono capitalize">{callState.targetUser.role.replace('_', ' ')}</p>
-              <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-mono text-emerald-400 font-bold">
-                {callState.isConnected ? (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    {formatDuration(callState.callDurationSeconds)}
-                  </>
-                ) : (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-                    Calling peer...
-                  </>
+                {(callState.isVideoOff || !hasLocalVideo) && (
+                  <div className="w-full h-full flex items-center justify-center bg-slate-800 text-[10px] text-slate-400">
+                    {callState.isVideoOff ? 'Camera Off' : 'No Camera'}
+                  </div>
                 )}
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="py-8 flex flex-col items-center justify-center text-center space-y-4">
+              <div className="relative">
+                {callState.targetUser.avatarUrl ? (
+                  <img
+                    src={callState.targetUser.avatarUrl}
+                    alt={callState.targetUser.name}
+                    className="w-24 h-24 rounded-full object-cover border-4 border-indigo-500 shadow-xl"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-24 h-24 rounded-full bg-indigo-950 border-4 border-indigo-500 flex items-center justify-center text-indigo-300 text-4xl font-black shadow-xl">
+                    {callState.targetUser.name.charAt(0)}
+                  </div>
+                )}
+                {callState.isConnected && (
+                  <span className="absolute bottom-0 right-0 p-1.5 rounded-full bg-emerald-500 border-2 border-slate-900">
+                    <Volume2 className="w-4 h-4 text-white animate-pulse" />
+                  </span>
+                )}
+              </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center justify-center gap-4 pt-4 border-t border-slate-800">
-          <button
-            onClick={() => socketService.toggleMute()}
-            className={`p-3.5 rounded-full transition cursor-pointer ${
-              callState.isMuted
-                ? 'bg-rose-500 text-white hover:bg-rose-600'
-                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-            }`}
-            title={callState.isMuted ? 'Unmute' : 'Mute'}
-          >
-            {callState.isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-          </button>
+              <div>
+                <h3 className="text-xl font-extrabold text-white">{callState.targetUser.name}</h3>
+                <p className="text-xs text-indigo-300 font-mono capitalize">{callState.targetUser.role.replace('_', ' ')}</p>
+                <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-mono text-emerald-400 font-bold">
+                  {callState.isConnected ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      {formatDuration(callState.callDurationSeconds)}
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                      Calling peer...
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
-          {callState.callType === 'video' && (
+          <div className="pt-3">{mediaBanner(isMinimized)}</div>
+
+          {/* Action Controls */}
+          <div className="flex items-center justify-center gap-4 pt-4 border-t border-slate-800">
             <button
-              onClick={() => socketService.toggleVideo()}
+              onClick={() => socketService.toggleMute()}
               className={`p-3.5 rounded-full transition cursor-pointer ${
-                callState.isVideoOff
+                callState.isMuted
                   ? 'bg-rose-500 text-white hover:bg-rose-600'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
               }`}
-              title={callState.isVideoOff ? 'Turn on Camera' : 'Turn off Camera'}
+              title={callState.isMuted ? 'Unmute' : 'Mute'}
             >
-              {callState.isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+              {callState.isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
             </button>
-          )}
 
-          <button
-            onClick={() => socketService.endCall()}
-            className="px-6 py-3.5 rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-rose-600/30 transition cursor-pointer"
-          >
-            <PhoneOff className="w-5 h-5" />
-            End Call
-          </button>
+            {callState.callType === 'video' && (
+              <button
+                onClick={() => socketService.toggleVideo()}
+                className={`p-3.5 rounded-full transition cursor-pointer ${
+                  callState.isVideoOff
+                    ? 'bg-rose-500 text-white hover:bg-rose-600'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                }`}
+                title={callState.isVideoOff ? 'Turn on Camera' : 'Turn off Camera'}
+              >
+                {callState.isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+              </button>
+            )}
+
+            <button
+              onClick={() => socketService.endCall()}
+              className="px-6 py-3.5 rounded-full bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-rose-600/30 transition cursor-pointer"
+            >
+              <PhoneOff className="w-5 h-5" />
+              End Call
+            </button>
+          </div>
+
+          {isMinimized && (
+            <div className="pt-3 text-center">
+              <p className="text-xs text-slate-300 truncate">{callState.targetUser.name}</p>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </Portal>
   );
 };
+
+export default WebRTCCallModal;

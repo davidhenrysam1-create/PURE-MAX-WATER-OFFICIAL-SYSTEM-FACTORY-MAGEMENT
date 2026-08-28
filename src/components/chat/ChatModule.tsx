@@ -285,13 +285,33 @@ export const ChatModule: React.FC = () => {
   const startVoiceRecording = async () => {
     try {
       if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
+        // Some low-end Android handsets and locked-down browsers reject the
+        // full voice-processing constraint block with OverconstrainedError
+        // (or NotReadableError when another app holds the mic). Previously a
+        // single all-or-nothing attempt meant those devices simply could not
+        // record voice notes at all. Fall back to progressively plainer
+        // constraints before giving up.
+        const constraintLadder: MediaStreamConstraints[] = [
+          { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
+          { audio: { echoCancellation: true } },
+          { audio: true },
+        ];
+
+        let stream: MediaStream | null = null;
+        let lastErr: unknown = null;
+
+        for (const constraints of constraintLadder) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (stream && stream.getAudioTracks().length > 0) break;
+            stream?.getTracks().forEach((t) => t.stop());
+            stream = null;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+
+        if (!stream) throw lastErr ?? new Error('No microphone available');
 
         // Determine best supported high-fidelity audio MIME type
         const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/aac'];
