@@ -54,9 +54,28 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+// ISSUE #7 — map engine default.
+// Google Maps is only used when the project actually supplies a key via
+// VITE_GOOGLE_MAPS_API_KEY. Previously the module always booted the Google
+// engine using a hard-coded third-party key; when that key hit its quota, was
+// revoked, or failed billing/auth, the map silently fell back mid-render and
+// users saw a blank grey viewport (the "map crash"). Leaflet + OpenStreetMap
+// needs no key and no billing, so it is now the safe default.
+const GOOGLE_MAPS_API_KEY = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '';
 const FALLBACK_GOOGLE_MAPS_KEY = 'AIzaSyBrOn-2IOLakiQkoq3cVqO6wGbHVWq67TE';
 const MAKENI_CENTER = { lat: 8.8858, lng: -12.0441 };
 const MAKENI_LEAFLET: [number, number] = [8.8858, -12.0441];
+
+// ISSUE #7 — hardware geolocation options.
+// `timeout: 5000` was far too aggressive: a phone doing a cold GPS lock outdoors
+// routinely needs 10-20s, so watchPosition() kept erroring with TIMEOUT before
+// any fix arrived, which left the map empty and looked like a crash.
+// enableHighAccuracy prefers real GPS over wifi/cell triangulation.
+const GPS_WATCH_OPTIONS: PositionOptions = {
+  enableHighAccuracy: true,
+  timeout: 20000,
+  maximumAge: 0,
+};
 
 type MapEngine = 'google' | 'leaflet';
 type LeafletTileMode = 'street' | 'humanitarian' | 'satellite' | 'dark';
@@ -144,8 +163,11 @@ export const FleetMapModule: React.FC = () => {
 
   const isDeliveryStaff = isFleetSalesAccount(currentUser);
 
-  // Map Engine & View States
-  const [activeEngine, setActiveEngine] = useState<MapEngine>('google');
+  // Map Engine & View States.
+  // Default to Leaflet unless a real Google Maps key has been configured.
+  const [activeEngine, setActiveEngine] = useState<MapEngine>(
+    GOOGLE_MAPS_API_KEY ? 'google' : 'leaflet'
+  );
   const [googleLoadFailed, setGoogleLoadFailed] = useState(false);
   const [googleAuthError, setGoogleAuthError] = useState(false);
   const [leafletMode, setLeafletMode] = useState<LeafletTileMode>('street');
@@ -157,7 +179,12 @@ export const FleetMapModule: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Simulation controls state
-  const [isSimulating, setIsSimulating] = useState(true);
+  // ISSUE #7: mock/demo vehicle movement is OFF by default. It used to boot with
+  // `useState(true)`, so every registered tricycle and van immediately began
+  // crawling along a hard-coded Makeni route — fabricated positions that looked
+  // identical to real GPS and made the live fleet view untrustworthy. Managers
+  // can still switch it on explicitly for demonstrations via the toolbar.
+  const [isSimulating, setIsSimulating] = useState(false);
   const [simulationSpeedMultiplier, setSimulationSpeedMultiplier] = useState<number>(1);
   const simStepIndicesRef = useRef<Record<string, { routeIdx: number; wayptIdx: number; progress: number; stopTicks: number }>>({});
 
@@ -468,7 +495,15 @@ export const FleetMapModule: React.FC = () => {
 
   // 1. Dynamic Google Maps JavaScript API Loader with Fallback
   useEffect(() => {
-    const apiKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || FALLBACK_GOOGLE_MAPS_KEY;
+    // Only load the Google SDK when we are actually going to use it. Loading it
+    // unconditionally with an unset/invalid key triggers gm_authFailure, which
+    // force-switches engines mid-render and is a prime cause of the blank map.
+    if (!GOOGLE_MAPS_API_KEY && !FALLBACK_GOOGLE_MAPS_KEY) {
+      setActiveEngine('leaflet');
+      return;
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY || FALLBACK_GOOGLE_MAPS_KEY;
 
     window.gm_authFailure = () => {
       console.warn('Google Maps Authentication / Billing notice. Falling back to Leaflet.js & OpenStreetMap.');
@@ -794,6 +829,38 @@ export const FleetMapModule: React.FC = () => {
     }
   }, [activeEngine]);
 
+  /**
+   * Translate a GeolocationPositionError into something actionable.
+   *
+   * The old handlers only reacted to PERMISSION_DENIED. TIMEOUT and
+   * POSITION_UNAVAILABLE — the two most common failures on a phone doing a cold
+   * GPS fix — fell through silently, so the map just sat there with no
+   * explanation and no marker. Every code now produces a visible warning.
+   */
+  const handleGpsError = useCallback((err: GeolocationPositionError) => {
+    switch (err.code) {
+      case err.PERMISSION_DENIED:
+        setGpsPermissionDenied(true);
+        setLocationError(
+          "GPS Access Blocked: click 'Allow' in your browser address bar (or Site settings → Location) to show exact vehicle location."
+        );
+        break;
+      case err.POSITION_UNAVAILABLE:
+        setLocationError(
+          'Location unavailable: this device cannot determine a position right now. Move outdoors or enable device Location services.'
+        );
+        break;
+      case err.TIMEOUT:
+        setLocationError(
+          'GPS timed out before a fix was acquired. This is normal on a cold start — keep the device in view of the sky and retry.'
+        );
+        break;
+      default:
+        setLocationError(err.message || 'Unable to determine your location.');
+    }
+    setIsLocatingMe(false);
+  }, []);
+
   // Handle GPS Broadcast Toggle
   const handleToggleLiveGps = useCallback(() => {
     if (!currentUser) {
@@ -862,7 +929,7 @@ export const FleetMapModule: React.FC = () => {
           setLocationError("GPS Access Blocked: Click 'Allow' in your browser address bar to show exact vehicle location.");
         }
       },
-      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      GPS_WATCH_OPTIONS
     );
 
     const watchId = navigator.geolocation.watchPosition(
@@ -922,11 +989,11 @@ export const FleetMapModule: React.FC = () => {
         }
         setLocationError(msg);
       },
-      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      GPS_WATCH_OPTIONS
     );
 
     watchIdRef.current = watchId;
-  }, [currentUser, updateStaffLiveLocation, focusMapOnCoords]);
+  }, [currentUser, updateStaffLiveLocation, focusMapOnCoords, handleGpsError]);
 
   // Auto-acquire real device GPS on mount for fleet staff or logged in user
   useEffect(() => {
@@ -968,13 +1035,8 @@ export const FleetMapModule: React.FC = () => {
           focusMapOnCoords(latitude, longitude, 18);
           firstFixCenteredRef.current = true;
         },
-        (err) => {
-          if (err.code === err.PERMISSION_DENIED) {
-            setGpsPermissionDenied(true);
-            setLocationError("GPS Access Blocked: Click 'Allow' in your browser address bar to show exact vehicle location.");
-          }
-        },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        handleGpsError,
+        GPS_WATCH_OPTIONS
       );
 
       // Continuous high-precision watch
@@ -1013,13 +1075,8 @@ export const FleetMapModule: React.FC = () => {
             firstFixCenteredRef.current = true;
           }
         },
-        (err) => {
-          if (err.code === err.PERMISSION_DENIED) {
-            setGpsPermissionDenied(true);
-            setLocationError("GPS Access Blocked: Click 'Allow' in your browser address bar to show exact vehicle location.");
-          }
-        },
-        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+        handleGpsError,
+        GPS_WATCH_OPTIONS
       );
 
       watchIdRef.current = watchId;
@@ -1028,7 +1085,7 @@ export const FleetMapModule: React.FC = () => {
         navigator.geolocation.clearWatch(watchId);
       };
     }
-  }, [currentUser?.id, updateStaffLiveLocation, focusMapOnCoords]);
+  }, [currentUser?.id, updateStaffLiveLocation, focusMapOnCoords, handleGpsError]);
 
   // Cleanup watcher on unmount
   useEffect(() => {

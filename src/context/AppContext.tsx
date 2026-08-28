@@ -49,6 +49,13 @@ import { downloadExcelBackup, FactoryBackupData } from '../utils/excelBackup';
 import { idbStorage } from '../utils/indexedDBStorage';
 import { safeLocalStorageGet, safeLocalStorageSet, safeLocalStorageRemove } from '../utils/safeStorage';
 import { compressImage } from '../utils/imageCompressor';
+import {
+  cacheAvatar,
+  getCachedAvatarSync,
+  mergeUserPreservingAvatar,
+  rehydrateAvatars,
+  stripAvatars,
+} from '../utils/avatarStore';
 
 interface ToastNotification {
   id: string;
@@ -826,7 +833,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setUsers((prevLocal) => {
             const map = new Map<string, User>();
             prevLocal.forEach((u: User) => map.set(u.employeeId || u.id, u));
-            mapped.forEach((u: User) => map.set(u.employeeId || u.id, { ...map.get(u.employeeId || u.id), ...u }));
+            mapped.forEach((u: User) => {
+              const key = u.employeeId || u.id;
+              const existing = map.get(key);
+              // ISSUE #10: the plain spread `{ ...existing, ...u }` let a null
+              // avatarUrl from the server wipe a locally uploaded picture on
+              // every background sync. mergeUserPreservingAvatar() keeps the
+              // locally cached image when the server has none.
+              map.set(key, existing ? mergeUserPreservingAvatar(existing, u) : u);
+            });
             return Array.from(map.values());
           });
         }
@@ -1103,8 +1118,57 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Persistent State Sync: Guarantee zero data loss across restarts & refreshes with QuotaExceededError protection
   useEffect(() => {
-    safeLocalStorageSet('puremax_users_official_v5', users);
+    // Profile pictures are base64 data URLs and are the single biggest thing in
+    // this array. If a full write blows the ~5 MB localStorage quota, retry
+    // without them: account records MUST persist, and the pictures are restored
+    // from IndexedDB on the next load (see the avatar hydration effect below).
+    const ok = safeLocalStorageSet('puremax_users_official_v5', users);
+    if (!ok) {
+      console.warn(
+        'User list exceeded localStorage quota — retrying without avatar data (avatars restored from IndexedDB).'
+      );
+      safeLocalStorageSet('puremax_users_official_v5', stripAvatars(users));
+    }
   }, [users]);
+
+  // ---------------------------------------------------------------------------
+  // ISSUE #10 — Restore profile pictures from IndexedDB after a reload
+  // ---------------------------------------------------------------------------
+  // The users array may have been persisted without avatar data (quota guard
+  // above), and a plain refresh restores the session without going through
+  // login(), which used to be the only place the avatar cache was read back.
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const restored = await rehydrateAvatars(users);
+        if (cancelled) return;
+
+        const changed = restored.some((u, i) => u.avatarUrl !== users[i]?.avatarUrl);
+        if (changed) {
+          setUsers(restored);
+        }
+
+        // Keep the logged-in session in step with the restored picture.
+        setCurrentUser((prev) => {
+          if (!prev) return prev;
+          if (prev.avatarUrl) return prev;
+          const match = restored.find((u) => u.employeeId === prev.employeeId || u.id === prev.id);
+          return match?.avatarUrl ? { ...prev, avatarUrl: match.avatarUrl } : prev;
+        });
+      } catch (err) {
+        console.warn('Avatar rehydration error:', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally runs once on mount; later changes are handled by
+    // updateUserProfile() and the cloud-merge path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     safeLocalStorageSet('puremax_attendance_v3', attendance);
@@ -1374,7 +1438,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const trimmed = credential.trim().toLowerCase();
     const cleanDigits = credential.replace(/\D/g, '');
 
-    const foundUser = users.find((u) => {
+    let foundUser = users.find((u) => {
       const emailMatch = u.email.toLowerCase() === trimmed;
       const empIdMatch = u.employeeId.toLowerCase() === trimmed;
       const phoneClean = (u.phone || '').replace(/\D/g, '');
@@ -1420,10 +1484,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const onboardingKey = `puremax_onboarding_completed_${foundUser.employeeId || foundUser.id}`;
     const alreadyOnboarded = localStorage.getItem(onboardingKey) === 'true';
 
-    // Hydrate avatar from local storage
-    const cachedAvatar = localStorage.getItem(`user_avatar_${foundUser.employeeId}`);
-    if (cachedAvatar) {
-      foundUser.avatarUrl = cachedAvatar;
+    // Hydrate the avatar from the cache before the session is written back.
+    // Uses resolveAvatarUrl() so a picture stored only in IndexedDB is still
+    // picked up on next load even when the localStorage mirror was evicted.
+    const cachedAvatar = getCachedAvatarSync(foundUser.employeeId);
+    if (cachedAvatar && !foundUser.avatarUrl) {
+      foundUser = { ...foundUser, avatarUrl: cachedAvatar };
     }
 
     if (foundUser.isFirstLogin && !alreadyOnboarded) {
@@ -1632,12 +1698,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     if (data.avatarUrl) {
-      try {
-        localStorage.setItem(`user_avatar_${updatedUser.employeeId}`, data.avatarUrl);
-        idbStorage.saveMediaItem(`user_avatar_${updatedUser.employeeId}`, data.avatarUrl);
-      } catch (e) {
-        console.warn('Local avatar cache failed', e);
-      }
+      // Persist to IndexedDB (authoritative, no 5 MB cap) with a localStorage
+      // mirror for the very first paint. Previously the IDB write was
+      // fire-and-forget and the localStorage mirror was the only sync source,
+      // so the picture disappeared as soon as the mirror was evicted.
+      cacheAvatar(updatedUser.employeeId, data.avatarUrl).catch((err) =>
+        console.warn('Avatar cache write failed', err)
+      );
     }
 
     setCurrentUser(updatedUser);

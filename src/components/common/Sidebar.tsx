@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { GPS_MAP_ROLES, BASIC_STAFF_ROLES } from '../../utils/roleAccess';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -48,7 +49,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       id: 'map',
       label: 'Delivery Staff GPS Map',
       icon: Navigation,
-      roles: ['developer', 'ceo', 'manager', 'second_manager', 'sales_manager', 'operator', 'engineer'],
+      // Issue #7: shared allow-list, so the nav item can never disagree with
+      // the route guard in App.tsx or the toolbar button in Header.tsx.
+      roles: GPS_MAP_ROLES,
     },
     {
       id: 'sales',

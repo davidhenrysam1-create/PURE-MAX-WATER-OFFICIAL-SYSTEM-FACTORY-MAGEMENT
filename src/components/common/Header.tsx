@@ -6,6 +6,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ShareAppModal } from './ShareAppModal';
 import { Portal } from './Portal';
+import { canViewGpsMap } from '../../utils/roleAccess';
 import {
   Droplets,
   Bell,
@@ -267,8 +268,12 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu, isMobileMenu
               </button>
             )}
 
-            {/* Real-time Makeni GPS Map Button */}
-            {!['operator', 'staff', 'tricycle_staff', 'van_staff'].includes(activeRole) && (
+            {/* Real-time Makeni GPS Map Button
+                Gated on the shared allow-list: this previously used a different
+                (broader) list than the route guard, so CEO and Machine Operator
+                saw a button that either bounced them back to the dashboard or
+                opened a module reserved for operations staff. */}
+            {canViewGpsMap(activeRole) && (
               <button
                 onClick={() => setActiveTab('map')}
                 className="px-2.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-bold text-xs flex items-center gap-1.5 transition shadow-xs cursor-pointer"
@@ -545,7 +550,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu, isMobileMenu
                   </button>
                 )}
 
-                {!['operator', 'staff', 'tricycle_staff', 'van_staff'].includes(activeRole) && (
+                {canViewGpsMap(activeRole) && (
                   <button
                     onClick={() => {
                       setActiveTab('map');

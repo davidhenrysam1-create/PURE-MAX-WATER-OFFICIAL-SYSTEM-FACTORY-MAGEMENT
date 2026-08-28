@@ -27,6 +27,7 @@ import { GlobalToast } from './components/common/GlobalToast';
 import { WebRTCCallModal } from './components/call/WebRTCCallModal';
 import { InspectionBanner } from './components/common/InspectionBanner';
 import { socketService } from './services/socketService';
+import { canViewGpsMap } from './utils/roleAccess';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface ErrorBoundaryProps {
@@ -124,8 +125,8 @@ const AppContent: React.FC = () => {
         return <DashboardModule />;
       case 'map':
       case 'fleet_map':
-        const allowedGpsRoles = ['developer', 'ceo', 'manager', 'second_manager', 'sales_manager', 'operator', 'engineer'];
-        if (!allowedGpsRoles.includes(activeRole)) {
+        // Issue #7: single source of truth for the GPS map allow-list.
+        if (!canViewGpsMap(activeRole)) {
           return <DashboardModule />;
         }
         return <FleetMapModule />;
