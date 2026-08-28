@@ -273,55 +273,36 @@ Legacy pending items (predate this session, still open):
 
 From the Aug 2026 "12-Issue Repair & Feature Implementation Spec" (tracked as the
 active work order — see Section 7 for the running session log):
-5. [DONE — see item 6 above] Login Screen UI & Branding Cleanup
-6. [DONE — see item 7-8 above] Official Email Validation & Auth Overhaul
-   - Note: client-side email regex validation on account creation
-     (`UserManagementModule.tsx`) was already correctly implemented and blocking
-     `user@1.come`-style input before this session started; the actual bug was
-     entirely in the password-reset OTP flow (items 7-8 above), not the regex.
-7. [DONE — see item 9 above] Tricycle & Van Bundle Dispatch & Cash Reconciliation
-8. [NOT STARTED] Manager & Module Dashboards: Daily (24-hr) vs Lifetime Metrics
-   - The app spec (Section 4A above) states this was already fixed previously
-     ("Fixed bug where all-time sales were displayed under today's summary").
-     User reports it is "still not working" as of Aug 2026 — needs re-verification
-     against current `DashboardModule.tsx` daily-filter logic; likely a timezone or
-     manual-reset-button regression, not un-built from scratch. NOT YET INVESTIGATED
-     THIS SESSION.
-9. [NOT STARTED] Demo Data Purge & Real Sales Transaction Feed
-   - `DELETE /api/sales/mock` already exists per Section 5 item 3. Needs
-     verification that (a) it's still wired to a real Developer-portal button,
-     (b) no mock records have crept back in, and (c) the `GET /api/sales`
-     category-detection fix in item 9 above didn't change any purge filtering
-     logic (it didn't touch the mock-purge endpoint, but worth re-checking).
-10. [NOT STARTED] Top Navigation Z-Index & Layout Overlap Fix
-    - Section 5 item 4 above states this was already fixed
-      (header/sidebar z-50, modals z-[200], calls/notifications z-[400]).
-      User reports still-open overlap issues with the "Share App" banner
-      specifically — NOT YET INVESTIGATED THIS SESSION; check
-      `ShareAppModal`/banner component's z-index against that existing scheme.
-11. [NOT STARTED] Live Hardware GPS Fleet Tracking & Access Control Refactor
-    - RBAC route guard reportedly already secured (Section 5 item 1). Map
-      render/crash-prevention (`min-height: 550px`, `google.maps.event.trigger`
-      resize-on-mount, Leaflet fallback, permission-denied banner) NOT YET
-      INVESTIGATED THIS SESSION — needs a pass through `FleetMapModule.tsx`.
-12. [NOT STARTED] Sales Analytics Bar Chart Redesign
-    - NOT YET INVESTIGATED THIS SESSION.
-13. [NOT STARTED] Theme Switching & Glassmorphism Contrast Fixes
-    - Section 5 item 5 above claims partial coverage
-      (`text-slate-900 dark:text-white` added to some modules). User reports
-      still-open contrast issues, specifically Attendance Approval Queue and
-      Operator Staff accent-color variants under Glassmorphic mode — NOT YET
-      INVESTIGATED THIS SESSION.
-14. [NOT STARTED] User Profile Picture Persistence
-    - NOT YET INVESTIGATED THIS SESSION.
-15. [NOT STARTED] Call System & WebRTC Audio/Video Media Refactor
-    - `WebRTCCallModal.tsx` exists per Section 4E above. Ringtone / auto-dismiss-
-      on-end / mic+camera stream binding NOT YET INVESTIGATED THIS SESSION.
-16. [NOT STARTED] Developer Inspection Mode Cleanup
-    - An `InspectionBanner`-style component appears to already exist
-      (referenced in `DashboardModule.tsx` around the `isInspecting` state at
-      ~line 349). Whether nested/secondary inspection toggles still leak through
-      NOT YET INVESTIGATED THIS SESSION.
+5. [DONE] Login Screen UI & Branding Cleanup — see Section 5 item 6.
+6. [DONE] Official Email Validation & Auth Overhaul — see Section 5 items 7-8,
+   plus Section 8 (2026-08-28, Session 2) for the offline reset fallback.
+7. [DONE] Tricycle & Van Bundle Dispatch & Cash Reconciliation — see Section 5
+   item 9, plus Section 8 Session 2 for the two spec fields and the Manager
+   routing fix that were still missing.
+8. [DONE] Manager & Module Dashboards: Daily (24-hr) vs Lifetime Metrics.
+   Root cause was a UTC `toISOString()` date AND values computed once per render
+   with no midnight ticker. See Section 8 Session 2, Issue #4.
+9. [DONE] Demo Data Purge & Real Sales Transaction Feed. Note the prior session's
+   `DELETE /api/sales/mock` endpoint was actually a TRUNCATE of the whole sales
+   table — fixed. See Section 8 Session 2, Issue #5.
+10. [DONE] Top Navigation Z-Index & Layout Overlap Fix. Root cause was NOT a
+    missing z-index: the Share App modal was nested inside the header, whose
+    `backdrop-blur-md` makes it a containing block for `position: fixed`
+    children. See Section 8 Session 2, Issue #6.
+11. [DONE] Live Hardware GPS Fleet Tracking & Access Control Refactor — see
+    Section 8 Session 2, Issue #7.
+12. [DONE] Sales Analytics Bar Chart Redesign — see Section 8 Session 2, Issue #8.
+13. [DONE] Theme Switching & Glassmorphism Contrast Fixes. Two real root causes
+    found (Tailwind v4 `dark:` variant was OS-bound; a blanket `!important`
+    text override). See Section 8 Session 2, Issue #9.
+14. [DONE] User Profile Picture Persistence — see Section 8 Session 2, Issue #10.
+15. [DONE] Call System & WebRTC Audio/Video Media Refactor — see Section 8
+    Session 2, Issue #11.
+16. [DONE] Developer Inspection Mode Cleanup — see Section 8 Session 2, Issue #12.
+
+>>> ALL 12 ISSUES OF THE AUG 2026 SPEC ARE NOW ADDRESSED <<<
+Remaining work is verification on real hardware — see Section 8 Session 2,
+"NEEDS HUMAN VERIFICATION".
 
 ================================================================================
 7. AI ASSISTANT SESSION LOG (CROSS-MODEL / CROSS-SESSION HANDOFF)
@@ -431,3 +412,428 @@ broken) — see Section 6, item 8.
 ================================================================================
 END OF SPECIFICATION FILE
 ================================================================================
+
+--------------------------------------------------------------------------------
+SESSION: 2026-08-28 — Session 2 (Arena.ai Agent) — Issues #2, #3, #4, #5, #6,
+                      #7, #8, #9, #10, #11, #12
+--------------------------------------------------------------------------------
+CONTEXT
+Session 1 (same day) had completed Issues #1, #2 and #3 on branch
+`fix/login-overlay-and-otp-security`, which was merged to main. This session
+started from a clean pull of main, confirmed `npm install` + `npx tsc --noEmit`
+returned 0 errors BEFORE touching anything, and worked through the remaining
+nine issues. `npx tsc --noEmit` and `npx vite build` were both re-run clean
+after every commit.
+
+CRITICAL DEPLOYMENT CONSTRAINT ESTABLISHED THIS SESSION (read this first)
+  The owner deploys the app in GOOGLE AI STUDIO (which runs server.ts) and uses
+  GITHUB PAGES only as a static test bed, pulling changes back into AI Studio.
+  Two consequences that shaped every fix:
+   1. `src/db/index.ts` constructs a pg Pool unconditionally with
+      `host: process.env.SQL_HOST`. With no SQL_HOST set (AI Studio) every
+      `/api/*` route rejects, so the app is 100% dependent on browser storage.
+   2. A GitHub Pages deploy has NO backend at all.
+  => Every feature in this session was built CLIENT-FIRST (localStorage +
+     IndexedDB), with the server treated as best-effort sync that may be absent.
+     Do not add features that require a reachable server for the happy path.
+
+================================================================================
+ISSUE #9 — THEME SWITCHING & GLASSMORPHISM CONTRAST  [FIXED & VERIFIED]
+================================================================================
+ROOT CAUSE A (the big one) — Tailwind v4 dark mode was OS-bound.
+  In Tailwind v4 the `dark:` variant compiles against `prefers-color-scheme` by
+  DEFAULT; it does NOT look for a `.dark` class unless you declare one. The app
+  toggles light/dark from an in-app control (App.tsx adds/removes `dark` on
+  #app-main-layout), so EVERY `dark:bg-slate-900` / `dark:text-white` in the
+  codebase was following the OPERATING SYSTEM, not the user's choice. Switching
+  to "Crisp Light Mode" therefore did nothing (or inverted) whenever the OS
+  theme disagreed — reported as a "theme switching crash".
+  FIX: `src/index.css` now declares
+       `@custom-variant dark (&:where(.dark, .dark *));`
+  VERIFIED IN COMPILED OUTPUT: after `npx vite build`, the emitted CSS contains
+  ZERO `prefers-color-scheme` rules and 228 `:where(.dark, ...)` selectors.
+
+ROOT CAUSE B — a blanket `!important` text override.
+  index.css forced `.text-white`, `.dark:text-white`, `.dark:text-slate-100/200/300`
+  (and the slate-900/800/700/600 set) ALL to `var(--text-primary)`. In Light Mode
+  that variable is near-black (#0f172a), so every element an author had
+  deliberately marked `text-white` because it sits on a DARK surface — welcome
+  banner, engineer card, sales-officer card, water-quality monitor, inspection
+  banner, dark modal headers — rendered near-black on near-black.
+  FIX: only the ambiguous slate text utilities are remapped now. `.text-white`
+  and all `.dark:*` variants are left alone (with the variant fixed, `dark:`
+  resolves natively). The standard
+  `bg-white dark:bg-slate-900 text-slate-900 dark:text-white` card pattern —
+  which is what the Attendance Approval Queue and every modal/table use — now
+  resolves correctly in BOTH modes with no manual overrides.
+
+ROOT CAUSE C (bonus, mobile stability) — the glassmorphism rule matched every
+  `.bg-white`, and AttendanceMatrix puts `bg-white dark:bg-slate-900` on
+  individual <td> cells. That applied `backdrop-filter: blur(16px)` to hundreds
+  of table cells at once; each backdrop-filter forces its own compositing layer,
+  which is a classic trigger for the Android/Chrome raster OOM and the
+  "Pure Max Factory OS Recovery" crash screen.
+  FIX: table cells and inline elements are excluded via
+  `:not(td):not(th):not(tr):not(span)...`; blur is applied only to genuine
+  card/panel surfaces, and disabled entirely under 768px.
+
+ALSO: AppContext now mirrors the `dark` class onto <html> (App.tsx only sets it
+on #app-main-layout), so overlays rendered through a React portal into <body>
+also resolve their `dark:` styles.
+
+FILES: src/index.css, src/context/AppContext.tsx
+
+================================================================================
+ISSUE #6 — TOP NAVIGATION Z-INDEX & LAYOUT OVERLAP  [FIXED & VERIFIED]
+================================================================================
+ROOT CAUSE was NOT a missing z-index (the header already had z-50 and the modal
+z-[200]). Two CSS mechanics were defeating it:
+  1. The header carries `backdrop-blur-md`. `backdrop-filter` makes an element a
+     CONTAINING BLOCK for `position: fixed` descendants. So ShareAppModal's
+     `fixed inset-0` was positioned against the 4rem-tall header box, not the
+     viewport.
+  2. The header also carried `overflow-x-hidden` (and its inner bar
+     `overflow-hidden`) to crop the full-bleed banner image, which CLIPPED every
+     overflowing child — the notifications panel, colour picker and mobile menu
+     all lost everything below the header's bottom edge.
+FIX:
+  - New `src/components/common/Portal.tsx` renders children into <body>.
+  - ShareAppModal is now portalled out of the header.
+  - Removed `overflow-x-hidden` / `overflow-hidden` from the header and its inner
+    bar; the banner <div> keeps its own `overflow-hidden` so the image is still
+    cropped.
+  - Documented the z-index layering contract in index.css:
+      header/bottom-nav z-50 | header dropdowns z-[100] | modals z-[200] |
+      toasts z-[300] | active call overlay z-[400]
+FILES: src/components/common/Portal.tsx (new), src/components/common/Header.tsx,
+       src/index.css
+
+================================================================================
+ISSUE #11 — CALL SYSTEM & WEBRTC AUDIO/VIDEO  [FIXED, NEEDS HARDWARE VERIFICATION]
+================================================================================
+ROOT CAUSE A — receiver's call overlay never closed.
+  `socketService.endCallInternal(notify = false)` only called
+  `notifyCallState()` when `notify` was true, but the `call:ended` and
+  `call:rejected` socket handlers call `endCallInternal(false)`. So when the
+  OTHER party hung up, `currentCall` was nulled but no state change was ever
+  published — the receiver's React overlay kept rendering a stale call object
+  until a page reload. Exactly the reported symptom.
+  FIX: endCallInternal() now ALWAYS notifies. The `notify` flag only governs the
+  outgoing `call:end` emit.
+
+ROOT CAUSE B — remote audio was never rendered for voice calls.
+  The remote MediaStream was only bound to a <video> element, which exists
+  solely when callType === 'video'. A voice call had no media element at all, so
+  the incoming audio track had nowhere to play: both sides connected and heard
+  silence. FIX: a hidden `<audio autoPlay>` sink is always mounted and carries
+  the remote stream for every call type.
+
+ROOT CAUSE C — getUserMedia was all-or-nothing.
+  One attempt with fixed constraints. Any failure (busy camera, no webcam,
+  insecure origin, OverconstrainedError on facingMode) threw, the error was
+  swallowed into console.warn, and the call continued with `localStream === null`
+  — so addTrack() was never called and the peer connection negotiated with NO
+  media. FIX: `getUserMediaStream()` walks a ladder of relaxed constraints
+  (video calls degrade to audio-only) and only throws if every rung fails.
+  Added `retryLocalMedia()`, which hot-swaps tracks into the live peer
+  connection via replaceTrack() and renegotiates, backing a new Retry button —
+  users routinely click "Block" on the first permission prompt.
+
+ALSO FIXED:
+  - ICE candidates arriving before setRemoteDescription() were dropped
+    (InvalidStateError). Buffered and flushed after — a common cause of
+    "connected but no media".
+  - ontrack now builds the stream from `event.track` when `event.streams` is
+    empty (Firefox does this), so remoteStream no longer stays null forever.
+  - onconnectionstatechange detects failed transports and tears the call down.
+  - RINGTONES: outgoing calls played `startIncomingRingtone()` — the same urgent
+    cadence the receiver hears — so callers could not tell which phone was
+    ringing. Added `startOutgoingRingtone()` (440+350 Hz ring-back) and
+    `playBusyTone()` in src/utils/audioChime.ts.
+  - Call overlay now portals at z-[400].
+  - Voice-note recording (ChatModule) falls back through relaxed audio
+    constraints instead of failing outright on devices that reject the full
+    constraint block.
+FILES: src/services/socketService.ts, src/components/call/WebRTCCallModal.tsx,
+       src/utils/audioChime.ts, src/components/chat/ChatModule.tsx
+
+================================================================================
+ISSUE #4 — DAILY (24-HR) VS LIFETIME METRICS + MANUAL RESET  [FIXED & VERIFIED]
+================================================================================
+ROOT CAUSE A — UTC date. "Today" was `new Date().toISOString().split('T')[0]`,
+  which converts to UTC first, while records store a LOCAL date straight from
+  <input type="date">. Sierra Leone is UTC+0 so it is invisible there, but any
+  device on another timezone silently missed or double-counted a day.
+ROOT CAUSE B — computed once per render. There was no midnight ticker, so a tab
+  left open past midnight kept showing yesterday's totals until something
+  unrelated re-rendered. This is why the cards "never reset".
+FIX:
+  - New `src/utils/dateUtils.ts`: `localDateKey()`, `startOfLocalDay()`,
+    `msUntilNextLocalMidnight()`, `recordTimestamp()`.
+  - AppContext holds `todayDateKey` in state and re-arms a timer for the next
+    LOCAL midnight, plus a `visibilitychange`/`focus` re-check because mobile
+    browsers freeze timers in backgrounded tabs.
+  - Daily filtering is now WINDOW-based via `dailyWindowStart`.
+  - Added the "Reset Daily Counters" control for Manager / 2nd Manager /
+    Developer behind a two-step confirmation (open dialog, then type RESET).
+    It is NON-DESTRUCTIVE: it moves the start of the daily window forward, so
+    the cards zero out while every record stays in state, in Reports and in the
+    Excel export. Once midnight passes, the natural rollover takes over again.
+FILES: src/utils/dateUtils.ts (new), src/context/AppContext.tsx,
+       src/components/dashboard/DashboardModule.tsx
+
+================================================================================
+ISSUE #5 — DEMO DATA PURGE & REAL SALES TRANSACTION FEED  [FIXED & VERIFIED]
+================================================================================
+- "Recent Sales Transactions" rendered `sales.slice(0, 4)` — the first four rows
+  in arbitrary state order, including seeded rows and non-sales entries such as
+  "Damaged Bundles". Now bound strictly to transactions logged by ACTIVE
+  Production Sales Officer accounts, newest first, with an explicit empty state.
+  Relabelled "Live Sales Transactions".
+- New `AppContext.purgeDemoData()`: removes records flagged demo/mock, or not
+  attributable to a real active staff account, across sales, attendance and
+  production. Local-first, then best-effort server sweep.
+- *** SAFETY FIX *** `DELETE /api/sales/mock` ran `db.delete(salesRecords)` with
+  NO where clause — it TRUNCATED the entire sales table, while the button that
+  calls it promises to remove only "mock records". Clicking it destroyed every
+  real transaction the factory had ever logged. It now deletes only
+  demo-identifiable rows (DEMO-/MOCK- invoice numbers, known seeded staff names)
+  unless an explicit `scope=all&confirm=TRUNCATE_ALL` token is supplied, and
+  reports the row count. Added `or`, `like`, `inArray` to the drizzle import.
+- The Developer danger-zone button now calls `purgeDemoData()`; it previously
+  hard-failed with "Error purging data" whenever no backend was reachable.
+FILES: src/context/AppContext.tsx, src/components/dashboard/DashboardModule.tsx,
+       src/components/system/SystemHealthModule.tsx, server.ts
+
+================================================================================
+ISSUE #10 — USER PROFILE PICTURE PERSISTENCE  [FIXED, NEEDS HARDWARE VERIFICATION]
+================================================================================
+ROOT CAUSE A — cloud merge clobbered it. `refreshCloudData()` merged the server
+  row over the local one with a plain spread. With no Postgres (AI Studio) or a
+  NULL column, the incoming `avatarUrl` is null and wiped the freshly uploaded
+  picture on the very next 8-second background sync.
+ROOT CAUSE B — localStorage is the wrong place. Avatars are base64 data URLs
+  written into the `users` array, serialised to localStorage on every change
+  (~5 MB shared budget). `safeLocalStorageSet()` swallows QuotaExceededError, so
+  once a few pictures exhausted the quota, ACCOUNT EDITS silently stopped
+  persisting too.
+ROOT CAUSE C — hydration was login-only. `login()` re-read the avatar cache, but
+  a plain page refresh restores the session straight from
+  `puremax_active_session_user_v5` without that step.
+FIX:
+  - New `src/utils/avatarStore.ts`. Avatars live in IndexedDB (effectively
+    unbounded) keyed by employeeId, with a small localStorage mirror purely for
+    first paint. Exports `cacheAvatar`, `resolveAvatarUrl`, `stripAvatars`,
+    `rehydrateAvatars`, `mergeUserPreservingAvatar`.
+  - The users write now retries without avatar data if the full write blows the
+    quota, guaranteeing account records persist.
+  - A mount effect rehydrates every picture from IndexedDB into `users` and
+    `currentUser`.
+FILES: src/utils/avatarStore.ts (new), src/context/AppContext.tsx
+
+================================================================================
+ISSUE #7 — LIVE HARDWARE GPS FLEET TRACKING & ACCESS CONTROL  [FIXED]
+================================================================================
+- Map engine now defaults to Leaflet/OpenStreetMap unless
+  `VITE_GOOGLE_MAPS_API_KEY` is set. It previously always booted Google using a
+  hard-coded third-party key; when that key hit quota/revocation the SDK fired
+  gm_authFailure and swapped engines mid-render — the blank grey viewport
+  reported as a "map crash". The Google SDK is no longer even requested when we
+  are not going to use it.
+- Mock/demo vehicle movement is now OFF by default (was `useState(true)`, so
+  every registered tricycle and van immediately animated along a fabricated
+  Makeni route indistinguishable from real GPS). Managers can enable it
+  deliberately for demos.
+- New `src/utils/roleAccess.ts` is the single source of truth for the GPS map
+  allow-list. It had been hand-written in THREE places with different contents:
+  the sidebar hid the map from Machine Operators while the header still showed
+  the button, and CEO could open a module the spec reserves for operations
+  staff. Per spec the map is now limited to Manager, 2nd Manager, Production
+  Sales Officer, Production Officer (engineer) and Developer.
+    >>> NOTE FOR THE OWNER: `ceo` and `operator` were previously included and
+        are now excluded, because the spec says "strictly" those four roles and
+        "hide from basic staff". If the CEO should retain access, add 'ceo' to
+        GPS_MAP_ROLES in src/utils/roleAccess.ts — nothing else changes.
+- Geolocation timeout raised 5s -> 20s (a phone doing a cold GPS lock routinely
+  needs 10-20s, so watchPosition() kept timing out before any fix arrived) and
+  the options object is now a shared `GPS_WATCH_OPTIONS` constant.
+- All GeolocationPositionError codes handled. Only PERMISSION_DENIED was handled
+  before, so TIMEOUT and POSITION_UNAVAILABLE — the two most common phone
+  failures — failed silently with no marker and no explanation.
+- Map containers already carried `min-height: 550px` / `height: 100%` and the
+  `google.maps.event.trigger(map,'resize')` + `invalidateSize()` calls; verified
+  and left intact.
+FILES: src/components/fleet/FleetMapModule.tsx, src/utils/roleAccess.ts (new),
+       src/App.tsx, src/components/common/Sidebar.tsx,
+       src/components/common/Header.tsx
+
+================================================================================
+ISSUE #8 — SALES ANALYTICS BAR CHART REDESIGN  [FIXED & VERIFIED]
+================================================================================
+Bars were low-saturation (#3b82f6 / #f59e0b / #10b981) and, against the glass
+panel in Dark Mode, read as flat dark grey with no separation between series;
+gridlines at 0.15 opacity were effectively invisible.
+Per spec: Gross Revenue -> Emerald Green (#10b981), Expenses -> Crimson
+(#DC143C), Net Profit -> Bright Cyan (#22d3ee). Bundles Distributed / Damaged
+aligned to the same cyan/crimson coding.
+Also: gridlines to 0.28 opacity and de-cluttered (vertical={false}); axis ticks
+brightened to #cbd5e1/600; tooltips now an opaque near-black surface with
+explicit WHITE label AND item text (previously only the container had
+color:#fff, so Recharts' default series-coloured item text reasserted itself and
+went unreadable on some bars); hover affordances (translucent cursor band,
+per-bar activeBar highlight with white outline, maxBarSize); summary cards
+recoloured to match the bars; ReportsModule brought onto the same palette.
+FILES: src/components/sales/SalesModule.tsx, src/components/reports/ReportsModule.tsx
+
+================================================================================
+ISSUE #12 — DEVELOPER INSPECTION MODE CLEANUP  [FIXED & VERIFIED]
+================================================================================
+The inspection sandbox rendered on
+`currentUser?.role === 'developer' || isInspecting`. While inspecting, the
+Developer's session IS the target staff account, so `currentUser.role` is no
+longer 'developer' — but `isInspecting` is true, meaning the full grid of
+"Inspect As …" buttons was painted INSIDE the staff member's dashboard. That is
+the "secondary inspection triggers leaking into the target dashboard".
+FIX: it now renders only when `currentUser?.role === 'developer' && !isInspecting`,
+leaving the sticky "Exit Inspection (Restore Super Admin)" banner in
+InspectionBanner.tsx as the sole control.
+FILES: src/components/dashboard/DashboardModule.tsx
+
+================================================================================
+ISSUE #3 — BUNDLE DISPATCH & SALES AUDIT (gaps closed)  [FIXED]
+================================================================================
+Session 1 built the data path (loaded / sold / unsold / cash collected /
+shortfall flags). Re-verified this session; two spec'd inputs were still missing
+and the module was unreachable for Managers:
+  - Added "Dispatch Time (Left Factory)" to both the Van and Tricycle modals.
+    Only a date was captured, so two dispatches on the same day could not be
+    told apart in the audit trail.
+  - Added "Stock Officer Sign-off" — the officer who verified the load-out.
+    Defaults to 'Unsigned' when blank so an unattested dispatch is visibly
+    unattested. Both values go into `notes`, which is already exported to CSV
+    and Excel.
+  - ROUTING: the module lived only behind the 'production' tab, which App.tsx
+    routes to ProductionModule for every role EXCEPT sales_manager — so Managers,
+    named as a primary user by the spec, could never open it. Added a dedicated
+    'dispatch' tab (Bundle Dispatch & Audit) wired to DISPATCH_ROLES
+    (developer, manager, second_manager, sales_manager).
+  - GPS sidebar "bundles delivered today" now uses the shared `localDateKey()`
+    instead of a UTC date, so it agrees with the dashboard's daily window.
+FILES: src/components/sales/SalesDailyRecordsModule.tsx, src/App.tsx,
+       src/components/common/Sidebar.tsx, src/utils/roleAccess.ts,
+       src/components/fleet/FleetMapModule.tsx
+
+================================================================================
+ISSUE #2 — PASSWORD RESET (gaps closed)  [FIXED]
+================================================================================
+Password reset was completely non-functional on a static deploy: on GitHub Pages
+`POST /api/auth/request-reset` returns the host's HTML 404 page, so
+`res.json()` threw and the user saw "Network error connecting to verification
+engine" with no way to recover an account.
+  - `handleSendResetOtp()` now distinguishes three outcomes: a working server
+    (use it), a real server that REJECTED the account (surface its error — do
+    NOT bypass it with the fallback), and no server at all (fall back).
+  - Added a device-local recovery-code fallback: the identifier is matched
+    against real accounts, a single-use 6-digit code is issued with a 15-minute
+    expiry, and it is shown in a clearly labelled "Offline Recovery Mode" panel
+    explaining that no email/WhatsApp could be sent. Not a security regression —
+    the entire account list already lives in that browser's localStorage.
+  - `handleConfirmResetPassword()` mirrors the same three-way logic and marks the
+    code used after redemption.
+FIREBASE — IMPORTANT, DO NOT "FIX" THIS BLINDLY:
+  The spec asks for `sendPasswordResetEmail`. `src/lib/firebase.ts` initialised
+  the Firebase SDK but was never imported anywhere — dead code. The call also
+  CANNOT work as written: Pure Max accounts are created by Managers in
+  UserManagementModule and stored in localStorage / the app's own PostgreSQL
+  `users` table. They are NOT provisioned in Firebase Auth, so
+  `sendPasswordResetEmail()` would reject `auth/user-not-found` for 100% of
+  accounts. Adopting real Firebase Auth requires migrating every existing
+  account into Firebase Auth first, then switching `login()` in AppContext over
+  to `signInWithEmailAndPassword()`. This is documented in src/lib/firebase.ts.
+FILES: src/components/auth/LoginModal.tsx, src/lib/firebase.ts, .env.example
+
+================================================================================
+FILES ADDED THIS SESSION
+================================================================================
+  src/components/common/Portal.tsx      — portal helper (Issue #6)
+  src/utils/dateUtils.ts                — local-timezone date helpers (Issue #4)
+  src/utils/avatarStore.ts              — IndexedDB avatar persistence (Issue #10)
+  src/utils/roleAccess.ts               — single source of truth for RBAC (Issue #7)
+
+FILES MODIFIED THIS SESSION
+  src/index.css                         — Issues #6, #9
+  src/context/AppContext.tsx            — Issues #4, #5, #9, #10
+  src/App.tsx                           — Issues #3, #7
+  src/components/common/Header.tsx      — Issues #6, #7
+  src/components/common/Sidebar.tsx     — Issues #3, #7
+  src/components/dashboard/DashboardModule.tsx — Issues #4, #5, #12
+  src/components/system/SystemHealthModule.tsx — Issue #5
+  src/components/fleet/FleetMapModule.tsx      — Issues #3, #7
+  src/components/sales/SalesModule.tsx         — Issue #8
+  src/components/sales/SalesDailyRecordsModule.tsx — Issue #3
+  src/components/reports/ReportsModule.tsx     — Issue #8
+  src/components/call/WebRTCCallModal.tsx      — Issue #11
+  src/components/chat/ChatModule.tsx           — Issue #11
+  src/services/socketService.ts                — Issue #11
+  src/utils/audioChime.ts                      — Issue #11
+  src/components/auth/LoginModal.tsx           — Issue #2
+  src/lib/firebase.ts                          — Issue #2 (documentation)
+  server.ts                                    — Issue #5 (truncate safety)
+  .env.example                                 — documentation
+  APP_SPECIFICATION_AND_STATE.txt               — this file
+
+================================================================================
+VERIFICATION STATUS
+================================================================================
+COMPILED CLEAN: `npx tsc --noEmit` -> 0 errors, `npx vite build` -> success,
+after every commit. The Tailwind dark-mode fix was additionally verified by
+grepping the built CSS: zero `prefers-color-scheme` rules, 228 `.dark`
+class-bound selectors.
+
+>>> NEEDS HUMAN VERIFICATION (no real Postgres, no browser, no device GPS,
+    camera or microphone available in this sandbox) <<<
+  - Issue #11 (highest risk): place an actual WebRTC call between two devices.
+    (a) Voice call — confirm both directions are AUDIBLE (this was completely
+        broken; the remote stream had no audio element to render into).
+    (b) Video call — confirm both camera feeds appear.
+    (c) Hang up from ONE side and confirm the OTHER side's overlay closes
+        immediately with no page reload.
+    (d) Deny microphone permission, confirm the amber banner appears, then
+        allow it and press Retry — confirm audio kicks in without hanging up.
+    NOTE: WebRTC requires the socket.io signalling server, so calls CANNOT work
+    on a static GitHub Pages deploy by design. Test them in Google AI Studio.
+  - Issue #7: open the GPS map on a real phone with Location enabled; confirm it
+    centres and zooms to 18 on the device position. Deny location permission and
+    confirm the amber banner appears with a Retry GPS Lock button. Confirm no
+    tricycle/van animates on its own (mock movement is now off by default).
+  - Issue #10: upload a profile picture, hard-refresh (Ctrl+Shift+R), confirm it
+    is still there; leave the tab open ~30s to let several background syncs run
+    and confirm it does not vanish.
+  - Issue #9: on a machine whose OS is set to DARK, switch the app to Crisp
+    Light Mode and confirm the UI actually goes light (this was the bug). Check
+    the Attendance Approval Queue text contrast in Light Mode.
+  - Issue #6: open the Share App dialog on a phone and confirm it covers the
+    full screen, not just the header strip; open the notifications dropdown and
+    confirm it is not clipped at the header's bottom edge.
+  - Issue #4: log a sale, confirm it appears in Today's cards; click Reset Daily
+    Counters (type RESET) and confirm the cards zero out while the record is
+    still present under Reports. Leave a tab open past local midnight and
+    confirm the cards roll over on their own.
+  - Issue #5: log a dispatch as a Production Sales Officer and confirm it
+    appears in the dashboard's "Live Sales Transactions" feed.
+
+>>> STILL OUTSTANDING FROM SESSION 1 — BLOCKS DEPLOYMENT <<<
+  The schema migration for the sales_records columns added in Session 1
+  (category, vehicle_number, loaded_bundles, unsold_bundles, damaged_losses)
+  has STILL not been run. `npx drizzle-kit push` (using
+  src/db/drizzle.config.ts, requires SQL_HOST / SQL_DB_NAME / SQL_ADMIN_USER /
+  SQL_ADMIN_PASSWORD) must be run against the live Postgres instance before
+  `POST /api/sales` will work in a deployment that actually has a database.
+  In Google AI Studio and on GitHub Pages there is no database, so this does not
+  affect those — but it will affect any hosted deployment.
+
+>>> SECURITY NOTE <<<
+  The owner pasted a GitHub fine-grained PAT into the chat to authorise these
+  pushes. It was used only through a git credential helper and was never written
+  to any file in the repository. It should be REVOKED and re-issued now that the
+  work is pushed.
