@@ -25,6 +25,7 @@ import {
   Pie,
   Cell,
   Legend,
+  CartesianGrid,
 } from 'recharts';
 
 export const ReportsModule: React.FC = () => {
@@ -50,7 +51,20 @@ export const ReportsModule: React.FC = () => {
 
   const totalExpenseVal = expensesByCategory.reduce((a, c) => a + c.value, 0);
 
-  const COLORS = ['#3b82f6', '#06b6d4', '#f59e0b', '#ef4444', '#8b5cf6'];
+  // Issue #8 — high-contrast palette + crisp tooltip, kept consistent with
+  // SalesModule so the same metric is always the same colour across the app.
+  const COLORS = ['#10b981', '#DC143C', '#22d3ee', '#f59e0b', '#8b5cf6'];
+
+  const CHART_TOOLTIP_STYLE = {
+    backgroundColor: 'rgba(2, 6, 23, 0.96)',
+    border: '1px solid rgba(148, 163, 184, 0.35)',
+    borderRadius: '0.75rem',
+    color: '#ffffff',
+    fontSize: '12px',
+    fontWeight: 600,
+    boxShadow: '0 10px 30px -5px rgba(0, 0, 0, 0.6)',
+    padding: '8px 12px',
+  } as const;
 
   const exportPDFSummary = () => {
     alert('Generating Pure Max Factory Analytical PDF Report... File export initiated.');
@@ -103,13 +117,17 @@ export const ReportsModule: React.FC = () => {
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={salesByCategory}>
-                <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
-                <YAxis stroke="#94a3b8" fontSize={12} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.28} vertical={false} />
+                <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tick={{ fill: '#cbd5e1', fontWeight: 600 }} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={12} tick={{ fill: '#cbd5e1', fontWeight: 600 }} tickLine={false} />
                 <Tooltip
                   formatter={(val: any) => [`SL Le ${Number(val).toLocaleString()}`, 'Revenue']}
-                  contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', color: '#fff' }}
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  labelStyle={{ color: '#ffffff', fontWeight: 700 }}
+                  itemStyle={{ color: '#ffffff' }}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.18)' }}
                 />
-                <Bar dataKey="value" fill="#3b82f6" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="value" fill="#10b981" radius={[8, 8, 0, 0]} maxBarSize={44} activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -127,11 +145,18 @@ export const ReportsModule: React.FC = () => {
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={productionVsDamagedData}>
-                <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} />
-                <YAxis stroke="#94a3b8" fontSize={12} />
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderRadius: '12px', color: '#fff' }} />
-                <Bar dataKey="Produced" fill="#06b6d4" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="Damaged" fill="#ef4444" radius={[6, 6, 0, 0]} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.28} vertical={false} />
+                <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} tick={{ fill: '#cbd5e1', fontWeight: 600 }} tickLine={false} />
+                <YAxis stroke="#94a3b8" fontSize={12} tick={{ fill: '#cbd5e1', fontWeight: 600 }} tickLine={false} />
+                <Tooltip
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  labelStyle={{ color: '#ffffff', fontWeight: 700 }}
+                  itemStyle={{ color: '#ffffff' }}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.18)' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 600 }} iconType="circle" />
+                <Bar dataKey="Produced" fill="#22d3ee" radius={[6, 6, 0, 0]} name="Produced" maxBarSize={32} activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }} />
+                <Bar dataKey="Damaged" fill="#DC143C" radius={[6, 6, 0, 0]} name="Damaged" maxBarSize={32} activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -155,7 +180,12 @@ export const ReportsModule: React.FC = () => {
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(val: any) => [`SL Le ${Number(val).toLocaleString()}`, 'Cost']} />
+                  <Tooltip
+                    formatter={(val: any) => [`SL Le ${Number(val).toLocaleString()}`, 'Cost']}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    labelStyle={{ color: '#ffffff', fontWeight: 700 }}
+                    itemStyle={{ color: '#ffffff' }}
+                  />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>

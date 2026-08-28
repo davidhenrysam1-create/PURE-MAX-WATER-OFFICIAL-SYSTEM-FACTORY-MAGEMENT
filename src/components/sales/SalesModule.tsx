@@ -54,6 +54,42 @@ export const SalesModule: React.FC = () => {
   const [customerOrDriver, setCustomerOrDriver] = useState('');
   const [notes, setNotes] = useState('');
 
+  /**
+   * Issue #8 — high-contrast chart palette.
+   *
+   * The previous bars were low-saturation and, on the glass surfaces used in
+   * Dark Mode, read as flat dark grey with no visual separation between the
+   * three series. The spec calls for:
+   *   Gross Revenue -> Emerald Green
+   *   Expenses      -> Crimson
+   *   Net Profit    -> Bright Cyan
+   */
+  const CHART_COLORS = {
+    revenue: '#10b981', // emerald-500
+    expenses: '#DC143C', // crimson
+    profit: '#22d3ee', // cyan-400 (bright)
+    bundles: '#22d3ee', // cyan-400
+    losses: '#DC143C', // crimson
+  } as const;
+
+  /**
+   * Crisp tooltip: opaque dark surface so it stays legible over any chart
+   * colour, with explicit white text per the spec.
+   */
+  const TOOLTIP_STYLE = {
+    backgroundColor: 'rgba(2, 6, 23, 0.96)',
+    border: '1px solid rgba(148, 163, 184, 0.35)',
+    borderRadius: '0.75rem',
+    color: '#ffffff',
+    fontSize: '12px',
+    fontWeight: 600,
+    boxShadow: '0 10px 30px -5px rgba(0, 0, 0, 0.6)',
+    padding: '8px 12px',
+  } as const;
+
+  const currencyFormatter = (value: any, name: any) => [`SL Le ${Number(value).toLocaleString()}`, name];
+  const unitFormatter = (value: any, name: any) => [`${Number(value).toLocaleString()} Bundles`, name];
+
   const canRecordSales = ['sales_manager', 'manager', 'second_manager', 'developer'].includes(activeRole);
   const canViewCharts = ['developer', 'ceo', 'manager', 'second_manager', 'sales_manager'].includes(activeRole);
 
@@ -302,8 +338,8 @@ export const SalesModule: React.FC = () => {
               <span className="text-[10px] text-emerald-600/80 dark:text-emerald-300">All depot & route collections</span>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 space-y-1 shadow-xs">
-              <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400">
+            <div className="p-4 rounded-xl bg-rose-50 dark:bg-slate-900 border border-rose-200 dark:border-rose-900/80 text-rose-900 dark:text-rose-100 space-y-1 shadow-xs">
+              <div className="flex items-center justify-between text-xs font-semibold text-rose-600 dark:text-rose-400">
                 <span className="flex items-center gap-1.5">
                   <CreditCard className="w-4 h-4" />
                   Operating Expenses
@@ -316,11 +352,11 @@ export const SalesModule: React.FC = () => {
 
             <div className={`p-4 rounded-xl border space-y-1 shadow-xs ${
               netProfitAllTime >= 0
-                ? 'bg-blue-50 dark:bg-slate-900 border-blue-200 dark:border-blue-900/80 text-blue-900 dark:text-blue-100'
+                ? 'bg-cyan-50 dark:bg-slate-900 border-cyan-200 dark:border-cyan-900/80 text-cyan-900 dark:text-cyan-100'
                 : 'bg-rose-50 dark:bg-slate-900 border-rose-200 dark:border-rose-900/80 text-rose-900 dark:text-rose-100'
             }`}>
               <div className="flex items-center justify-between text-xs font-semibold">
-                <span className={`flex items-center gap-1.5 ${netProfitAllTime >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                <span className={`flex items-center gap-1.5 ${netProfitAllTime >= 0 ? 'text-cyan-600 dark:text-cyan-400' : 'text-rose-600 dark:text-rose-400'}`}>
                   <BarChart3 className="w-4 h-4" />
                   Net Operating Profit / Loss
                 </span>
@@ -329,7 +365,7 @@ export const SalesModule: React.FC = () => {
               <div className="text-xl font-black">
                 {netProfitAllTime >= 0 ? '+' : ''}SL Le {netProfitAllTime.toLocaleString()}
               </div>
-              <span className={`text-[10px] ${netProfitAllTime >= 0 ? 'text-blue-600/80 dark:text-blue-300' : 'text-rose-600/80 dark:text-rose-300'}`}>
+              <span className={`text-[10px] ${netProfitAllTime >= 0 ? 'text-cyan-600/80 dark:text-cyan-300' : 'text-rose-600/80 dark:text-rose-300'}`}>
                 {totalRevenueAllTime > 0 ? `${((netProfitAllTime / totalRevenueAllTime) * 100).toFixed(1)}% profit margin` : '0% margin'}
               </span>
             </div>
@@ -392,23 +428,55 @@ export const SalesModule: React.FC = () => {
                 <div className="h-64 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-                      <XAxis dataKey="label" tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                      <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#0f172a',
-                          borderColor: '#334155',
-                          borderRadius: '0.75rem',
-                          color: '#fff',
-                          fontSize: '11px',
-                        }}
-                        formatter={(value: any, name: any) => [`SL Le ${Number(value).toLocaleString()}`, name]}
+                      {/* Grid lifted from 0.15 -> 0.28 opacity: at 0.15 it was
+                          invisible against the glass panel. */}
+                      <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.28} vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 11, fill: '#cbd5e1', fontWeight: 600 }}
+                        stroke="#94a3b8"
+                        tickLine={false}
                       />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="RevenueLe" fill="#3b82f6" radius={[6, 6, 0, 0]} name="Gross Revenue" />
-                      <Bar dataKey="ExpensesLe" fill="#f59e0b" radius={[6, 6, 0, 0]} name="Expenses" />
-                      <Bar dataKey="NetProfitLe" fill="#10b981" radius={[6, 6, 0, 0]} name="Net Profit" />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: '#cbd5e1', fontWeight: 600 }}
+                        stroke="#94a3b8"
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={TOOLTIP_STYLE}
+                        labelStyle={{ color: '#ffffff', fontWeight: 700, marginBottom: 4 }}
+                        itemStyle={{ color: '#ffffff' }}
+                        formatter={currencyFormatter}
+                        cursor={{ fill: 'rgba(148, 163, 184, 0.18)' }}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: '11px', fontWeight: 600, paddingTop: 6 }}
+                        iconType="circle"
+                      />
+                      <Bar
+                        dataKey="RevenueLe"
+                        fill={CHART_COLORS.revenue}
+                        radius={[6, 6, 0, 0]}
+                        name="Gross Revenue"
+                        maxBarSize={38}
+                        activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }}
+                      />
+                      <Bar
+                        dataKey="ExpensesLe"
+                        fill={CHART_COLORS.expenses}
+                        radius={[6, 6, 0, 0]}
+                        name="Expenses"
+                        maxBarSize={38}
+                        activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }}
+                      />
+                      <Bar
+                        dataKey="NetProfitLe"
+                        fill={CHART_COLORS.profit}
+                        radius={[6, 6, 0, 0]}
+                        name="Net Profit"
+                        maxBarSize={38}
+                        activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -423,22 +491,45 @@ export const SalesModule: React.FC = () => {
                 <div className="h-64 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-                      <XAxis dataKey="label" tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                      <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#0f172a',
-                          borderColor: '#334155',
-                          borderRadius: '0.75rem',
-                          color: '#fff',
-                          fontSize: '11px',
-                        }}
-                        formatter={(value: any, name: any) => [`${Number(value).toLocaleString()} Bundles`, name]}
+                      <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" opacity={0.28} vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 11, fill: '#cbd5e1', fontWeight: 600 }}
+                        stroke="#94a3b8"
+                        tickLine={false}
                       />
-                      <Legend wrapperStyle={{ fontSize: '11px' }} />
-                      <Bar dataKey="BundlesSold" fill="#0ea5e9" radius={[6, 6, 0, 0]} name="Sold / Dispatched" />
-                      <Bar dataKey="LossUnits" fill="#ef4444" radius={[6, 6, 0, 0]} name="Damaged Losses" />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: '#cbd5e1', fontWeight: 600 }}
+                        stroke="#94a3b8"
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={TOOLTIP_STYLE}
+                        labelStyle={{ color: '#ffffff', fontWeight: 700, marginBottom: 4 }}
+                        itemStyle={{ color: '#ffffff' }}
+                        formatter={unitFormatter}
+                        cursor={{ fill: 'rgba(148, 163, 184, 0.18)' }}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: '11px', fontWeight: 600, paddingTop: 6 }}
+                        iconType="circle"
+                      />
+                      <Bar
+                        dataKey="BundlesSold"
+                        fill={CHART_COLORS.bundles}
+                        radius={[6, 6, 0, 0]}
+                        name="Sold / Dispatched"
+                        maxBarSize={44}
+                        activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }}
+                      />
+                      <Bar
+                        dataKey="LossUnits"
+                        fill={CHART_COLORS.losses}
+                        radius={[6, 6, 0, 0]}
+                        name="Damaged Losses"
+                        maxBarSize={44}
+                        activeBar={{ fillOpacity: 0.82, stroke: '#ffffff', strokeWidth: 1.5 }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
