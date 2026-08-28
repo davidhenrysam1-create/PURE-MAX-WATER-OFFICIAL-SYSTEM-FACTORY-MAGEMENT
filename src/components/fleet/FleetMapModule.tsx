@@ -63,7 +63,13 @@ import {
 // users saw a blank grey viewport (the "map crash"). Leaflet + OpenStreetMap
 // needs no key and no billing, so it is now the safe default.
 const GOOGLE_MAPS_API_KEY = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '';
-const FALLBACK_GOOGLE_MAPS_KEY = 'AIzaSyBrOn-2IOLakiQkoq3cVqO6wGbHVWq67TE';
+// SECURITY: a Google Maps API key used to be hard-coded here as
+// FALLBACK_GOOGLE_MAPS_KEY. Two problems: (1) it is a credential committed to a
+// public repository and should be treated as compromised - REVOKE IT in the
+// Google Cloud console; (2) because the literal was always non-empty, the
+// "no key -> use Leaflet" guard below could never fire, so the map still booted
+// Google by default - the exact blank-viewport failure this fix was meant to
+// remove. The key is gone; supply your own via .env / VITE_GOOGLE_MAPS_API_KEY.
 const MAKENI_CENTER = { lat: 8.8858, lng: -12.0441 };
 const MAKENI_LEAFLET: [number, number] = [8.8858, -12.0441];
 
@@ -502,12 +508,12 @@ export const FleetMapModule: React.FC = () => {
     // Only load the Google SDK when we are actually going to use it. Loading it
     // unconditionally with an unset/invalid key triggers gm_authFailure, which
     // force-switches engines mid-render and is a prime cause of the blank map.
-    if (!GOOGLE_MAPS_API_KEY && !FALLBACK_GOOGLE_MAPS_KEY) {
+    if (!GOOGLE_MAPS_API_KEY) {
       setActiveEngine('leaflet');
       return;
     }
 
-    const apiKey = GOOGLE_MAPS_API_KEY || FALLBACK_GOOGLE_MAPS_KEY;
+    const apiKey = GOOGLE_MAPS_API_KEY;
 
     window.gm_authFailure = () => {
       console.warn('Google Maps Authentication / Billing notice. Falling back to Leaflet.js & OpenStreetMap.');
