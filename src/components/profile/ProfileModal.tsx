@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import PurgeRecordsPanel from '../dashboard/PurgeRecordsPanel';
 import { useApp } from '../../context/AppContext';
 import { requestCameraAccess, captureFrameFromVideo } from '../../utils/mediaPermissions';
 import { compressImage } from '../../utils/imageCompressor';
@@ -1129,6 +1130,15 @@ export const ProfileModal: React.FC = () => {
           <span>Sign Out of Pure Max</span>
         </button>
       </div>
+
+      {/* ------------------------------------------------------------------
+          Danger Zone — Record Purge
+          Deliberately placed LAST in Settings (Profile & Preferences), behind
+          an extra "Reveal" step, so it can never be triggered by accident.
+          Visible only to Manager / 2nd Manager / Developer (the panel itself
+          returns null for everyone else).
+         ------------------------------------------------------------------ */}
+      <PurgeRecordsPanel />
     </div>
   );
 };

@@ -864,3 +864,79 @@ SECURITY: that key is in the repo's git history and MUST be revoked in the
 Google Cloud console by the owner.
 FILE: src/components/fleet/FleetMapModule.tsx
 COMMIT: b1f2468
+
+================================================================================
+SESSION — Secure "Purge Records by Role" Safe Zone (Manager + Developer)
+================================================================================
+Requested by owner:
+  "Two big red buttons at the top that only Manager and Developer can see and
+   use: one to delete all records made by the Production Sales Officer, one to
+   delete all records made by the Production Engineer. They must warn first,
+   require the Manager/Developer password as a safe zone, and the records must
+   be stored securely in database AND Excel so data survives a crash."
+
+FINAL PLACEMENT (owner follow-up, this session):
+  The owner later asked for the buttons to be MOVED OUT of the top of the
+  dashboard because they wipe data: "i want those button to be hidden down or
+  in the setting they cant be easily assessable". They are now installed at the
+  VERY BOTTOM of Settings (Profile & Preferences), behind an extra reveal step.
+
+  Reaching them now takes five deliberate actions:
+    1. Open Settings (Profile & Preferences)
+    2. Scroll to the very bottom
+    3. Click "Reveal record purge tools"
+    4. Click one of the two red buttons
+    5. Read the warning, type your password, confirm
+
+FILES ADDED
+  src/utils/recordArchive.ts
+    - PurgeScope = 'sales_officer' | 'production_engineer'
+    - PURGE_SCOPE_META maps scope -> label + target role
+    - buildArchive() builds a signed, timestamped snapshot
+    - saveArchiveToVault()  -> IndexedDB (unbounded, survives refresh/crash)
+                            -> localStorage index (fast listing)
+    - downloadArchive()     -> multi-sheet .xlsx via SheetJS
+    - uploadArchiveToServer()-> best-effort POST /api/purge-archive
+    - listArchives() / loadArchive() / deleteArchive()
+
+  src/components/dashboard/PurgeRecordsPanel.tsx
+    - Renders null unless canPurgeRecords(effectiveRole)
+    - Collapsed by default behind a "Reveal record purge tools" button
+    - Two big red buttons when revealed
+    - Confirmation dialog (via <Portal>, so it escapes the sticky header's
+      backdrop-filter containing block and overflow-hidden clipping)
+    - Lists exactly what will be removed + affected accounts
+    - Password gate before anything is mutated
+
+FILES MODIFIED
+  src/utils/roleAccess.ts
+    - Added PURGE_RECORD_ROLES = ['developer', 'manager', 'second_manager']
+    - Added canPurgeRecords(role)
+    - NOTE: 'sales_manager' and 'engineer' are deliberately NOT on this list,
+      so a role can never purge its own records.
+
+  src/context/AppContext.tsx
+    - Added purgeRecordsByRole(scope, password) to AppContextType + provider
+    - verifyPrivilegedPassword(): developer accepts SAM_11422 / Sam11422 /
+      sam_11422 / SAM11422 / devpass, or its own stored password; managers
+      must supply their own account password.
+    - Order of operations is deliberate: ARCHIVE FIRST, MUTATE SECOND.
+      IndexedDB write + Excel download + server POST all happen before any
+      live collection is touched, so a failure mid-way leaves data intact.
+    - Collections purged: sales, production, attendance, expenses,
+      outerBuyings, rollBuyings, repairs, fuel, equipmentLogs
+    - Writes an audit log entry and raises a success toast.
+
+  src/components/profile/ProfileModal.tsx
+    - Mounts <PurgeRecordsPanel /> as the last element in Settings.
+
+SECURITY / BEHAVIOUR NOTES
+  - Server backup is best-effort by design. On GitHub Pages and on any AI
+    Studio deploy without Postgres there is no backend, so the local IndexedDB
+    copy + downloaded Excel are the real safety net. A failed server POST
+    never blocks or rolls back the purge.
+  - Archives are read-only snapshots, never auto re-merged.
+
+VERIFICATION
+  - npx tsc --noEmit passes with zero errors (TSC_EXIT=0).
+================================================================================

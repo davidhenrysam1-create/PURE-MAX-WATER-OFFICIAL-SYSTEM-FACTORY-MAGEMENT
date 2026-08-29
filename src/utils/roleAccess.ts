@@ -79,6 +79,19 @@ export const REPORTS_ROLES: UserRole[] = ['developer', 'ceo', 'manager', 'second
 /** Basic staff tiers — used to gate management-only chrome. */
 export const BASIC_STAFF_ROLES: UserRole[] = ['operator', 'staff', 'tricycle_staff', 'van_staff'];
 
+/**
+ * Roles permitted to run the "Purge Records by Role" safe-zone action.
+ * Per the owner's instruction this is Manager (incl. 2nd Manager) and
+ * Developer only. Crucially the roles being purged (Production Sales Officer
+ * and Production Engineer) are NOT on this list — they must never be able to
+ * wipe their own audit trail.
+ */
+export const PURGE_RECORD_ROLES: UserRole[] = ['developer', 'manager', 'second_manager'];
+
+export function canPurgeRecords(role: UserRole | string | undefined): boolean {
+  return !!role && PURGE_RECORD_ROLES.includes(role as UserRole);
+}
+
 export function canViewGpsMap(role: UserRole | string | undefined): boolean {
   return !!role && GPS_MAP_ROLES.includes(role as UserRole);
 }

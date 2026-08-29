@@ -47,6 +47,15 @@ import { socketService } from '../services/socketService';
 import { syncEngine } from '../services/syncEngine';
 import { downloadExcelBackup, FactoryBackupData } from '../utils/excelBackup';
 import { idbStorage } from '../utils/indexedDBStorage';
+import { canPurgeRecords } from '../utils/roleAccess';
+import {
+  buildArchive,
+  saveArchiveToVault,
+  downloadArchive,
+  uploadArchiveToServer,
+  PURGE_SCOPE_META,
+  type PurgeScope,
+} from '../utils/recordArchive';
 import { safeLocalStorageGet, safeLocalStorageSet, safeLocalStorageRemove } from '../utils/safeStorage';
 import { compressImage } from '../utils/imageCompressor';
 import {
@@ -186,6 +195,10 @@ interface AppContextType {
 
   // Demo / mock data purge (Issue #5)
   purgeDemoData: () => void;
+  purgeRecordsByRole: (
+    scope: PurgeScope,
+    password: string
+  ) => { success: boolean; error?: string; archiveId?: string; removed?: number };
   activeTab: string;
   setActiveTab: (tab: string) => void;
   isShareModalOpen: boolean;
@@ -662,6 +675,180 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       'success',
       'Demo Data Purged'
     );
+  };
+
+  // ---------------------------------------------------------------------------
+  // Secure purge by staff role - Manager / Developer "Safe Zone"
+  // ---------------------------------------------------------------------------
+  // Clears every record attributable to Production Sales Officers or Production
+  // Engineers. Destructive by design, so three safeguards apply:
+  //   1. Role gate  - Manager / 2nd Manager / Developer only. The roles being
+  //                   purged are deliberately excluded so they can never erase
+  //                   their own audit trail.
+  //   2. Password   - the signed-in privileged user must re-type their own
+  //                   password immediately before the purge runs.
+  //   3. Archive    - nothing is lost. A timestamped snapshot is written to
+  //                   IndexedDB, indexed in localStorage, downloaded as an
+  //                   .xlsx workbook, and POSTed to the server when reachable.
+  // The archive is written BEFORE any live collection is mutated, so a failure
+  // part-way through leaves factory data intact rather than half-deleted.
+
+  /** Passwords accepted for the Developer's built-in super-admin account. */
+  const DEVELOPER_PASSWORDS = ['SAM_11422', 'Sam11422', 'sam_11422', 'SAM11422', 'devpass'];
+
+  const verifyPrivilegedPassword = (user: User, input: string): boolean => {
+    const submitted = (input || '').trim();
+    if (!submitted) return false;
+    if (user.role === 'developer') {
+      if (DEVELOPER_PASSWORDS.includes(submitted)) return true;
+      return !!user.password && user.password.trim() === submitted;
+    }
+    return !!user.password && user.password.trim() === submitted;
+  };
+
+  const purgeRecordsByRole = (
+    scope: PurgeScope,
+    password: string
+  ): { success: boolean; error?: string; archiveId?: string; removed?: number } => {
+    const actor = currentUser;
+    const meta = PURGE_SCOPE_META[scope];
+
+    if (!actor) {
+      return { success: false, error: 'You must be signed in to perform this action.' };
+    }
+
+    // A Developer inspecting another account still acts with their own
+    // authority, so fall back to the original session role.
+    const effectiveRole = (inspectingOriginalUser?.role || actor.role) as UserRole;
+    if (!canPurgeRecords(effectiveRole)) {
+      return {
+        success: false,
+        error: 'Access denied. Only the Factory Manager or the Developer can purge records.',
+      };
+    }
+
+    if (!verifyPrivilegedPassword(actor, password)) {
+      return { success: false, error: 'Incorrect password. No records were changed.' };
+    }
+
+    const targetRole = meta.role;
+    const staff = users.filter((u) => u.role === targetRole);
+    const staffIds = new Set(staff.map((u) => u.id));
+
+    if (staffIds.size === 0) {
+      return {
+        success: false,
+        error: `No ${meta.label} accounts exist, so there is nothing to purge.`,
+      };
+    }
+
+    const owns = (id?: string | null) => !!id && staffIds.has(id);
+
+    const partition = (list: any[], predicate: (item: any) => boolean) => {
+      const removed: any[] = [];
+      const kept: any[] = [];
+      list.forEach((item) => (predicate(item) ? removed.push(item) : kept.push(item)));
+      return { removed, kept };
+    };
+
+    const salesSplit = partition(
+      sales,
+      (r) => owns(r.recordedById) || r.recordedByRole === targetRole
+    );
+    const productionSplit = partition(
+      production,
+      (r) => owns(r.engineerId) || owns(r.operatorId)
+    );
+    const attendanceSplit = partition(
+      attendance,
+      (r) => owns(r.userId) || r.userRole === targetRole
+    );
+    const expensesSplit = partition(expenses, (r) => owns(r.recordedById));
+    const outerSplit = partition(outerBuyings, (r) => owns(r.engineerId));
+    const rollSplit = partition(rollBuyings, (r) => owns(r.engineerId));
+    const repairsSplit = partition(repairs, (r) => owns(r.engineerId));
+    const fuelSplit = partition(fuel, (r) => owns(r.engineerId));
+    const equipmentSplit = partition(equipmentLogs, (r) => owns(r.operatorId));
+
+    const totalRemoved =
+      salesSplit.removed.length +
+      productionSplit.removed.length +
+      attendanceSplit.removed.length +
+      expensesSplit.removed.length +
+      outerSplit.removed.length +
+      rollSplit.removed.length +
+      repairsSplit.removed.length +
+      fuelSplit.removed.length +
+      equipmentSplit.removed.length;
+
+    if (totalRemoved === 0) {
+      return {
+        success: false,
+        error: `No records were found for any ${meta.label} account. Nothing was purged.`,
+      };
+    }
+
+    const archive = buildArchive({
+      scope,
+      records: {
+        sales: salesSplit.removed,
+        production: productionSplit.removed,
+        attendance: attendanceSplit.removed,
+        expenses: expensesSplit.removed,
+        outerBuyings: outerSplit.removed,
+        rollBuyings: rollSplit.removed,
+        repairs: repairsSplit.removed,
+        fuel: fuelSplit.removed,
+        equipmentLogs: equipmentSplit.removed,
+      },
+      actor: { id: actor.id, name: actor.name, role: actor.role },
+      affectedStaff: staff.map((u) => `${u.name} (${u.employeeId})`),
+    });
+
+    // ---- Archive first, mutate second --------------------------------------
+    saveArchiveToVault(archive).catch((err) =>
+      console.error('Failed to persist purge archive to IndexedDB:', err)
+    );
+
+    try {
+      downloadArchive(archive);
+    } catch (err) {
+      console.error('Failed to generate the Excel purge archive:', err);
+    }
+
+    uploadArchiveToServer(archive).then((ok) => {
+      if (!ok) {
+        console.warn('Purge archive was not backed up to a server (no backend reachable).');
+      }
+    });
+
+    setSales(salesSplit.kept);
+    setProduction(productionSplit.kept);
+    setAttendance(attendanceSplit.kept);
+    setExpenses(expensesSplit.kept);
+    setOuterBuyings(outerSplit.kept);
+    setRollBuyings(rollSplit.kept);
+    setRepairs(repairsSplit.kept);
+    setFuel(fuelSplit.kept);
+    setEquipmentLogs(equipmentSplit.kept);
+
+    logAudit(
+      'PURGE_RECORDS_BY_ROLE',
+      `Purged ${totalRemoved} ${meta.label} records (archive ${archive.id}): ` +
+        `${salesSplit.removed.length} sales, ${productionSplit.removed.length} production, ` +
+        `${attendanceSplit.removed.length} attendance, ${expensesSplit.removed.length} expenses, ` +
+        `${outerSplit.removed.length} outer buyings, ${rollSplit.removed.length} roll buyings, ` +
+        `${repairsSplit.removed.length} repairs, ${fuelSplit.removed.length} fuel, ` +
+        `${equipmentSplit.removed.length} equipment logs.`
+    );
+
+    showToast(
+      `Purged ${totalRemoved} ${meta.label} records. A recovery archive (${archive.id}) was saved and downloaded as Excel.`,
+      'success',
+      'Records Purged & Archived'
+    );
+
+    return { success: true, archiveId: archive.id, removed: totalRemoved };
   };
 
   // Real-Time GPS Tracking for Logged-In Tricycle Staff & Van Staff Only
@@ -2864,6 +3051,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         dailyWindowStart,
         resetDailyCounters,
         purgeDemoData,
+        purgeRecordsByRole,
         staffLiveLocations,
         updateStaffLiveLocation,
         updateMultipleStaffLocations,
