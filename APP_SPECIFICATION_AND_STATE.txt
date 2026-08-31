@@ -940,3 +940,67 @@ SECURITY / BEHAVIOUR NOTES
 VERIFICATION
   - npx tsc --noEmit passes with zero errors (TSC_EXIT=0).
 ================================================================================
+
+================================================================================
+SESSION — Remove all demo accounts & demo GPS data
+================================================================================
+Owner instruction:
+  "I DONT HAVE ANY ACCOUNT THAT IS A DEMO REMOVE THEM AND PLEASE CHECK THE GPS
+   IF ANY DEMO ACCOUNT OR DATA EXIT DELETE ALL I WANT THE ACTUAL ACCOUNT
+   (TRICYCLE OR VAN ACCOUNT) TO BE TRACKED NOT SOME DEMO ACCOUNT.. I CREATED
+   MANAGER ACCOUNT WHICH IS FRANCIS B SAM, THROUGH THE DEVELOPER DASHBORD
+   WHICH IS RIGHT AND CORRECT...."
+
+ACCOUNTS REMOVED (5)
+  PM-TRC-001  Brima Sesay      (tricycle_staff)
+  PM-TRC-002  Alpha Koroma     (tricycle_staff)
+  PM-VAN-001  Mohamed Kamara   (van_staff)
+  PM-VAN-002  Ibrahim Conteh   (van_staff)
+  PM-MGR-001  Alusine Kamara   (manager)
+
+ACCOUNTS KEPT (1) - DELIBERATELY NOT DELETED
+  DEV-11422   David Henry Sam  (developer)  davidhenrysam1@gmail.com
+  Reason: this is the owner's real account, not a demo. It is hardwired into
+  the login path in AppContext (email/employeeId/password check around the
+  "Developer Credentials Check" block) and is referenced as INITIAL_USERS[0]
+  by enterInspectionMode() and exitInspectionMode(). Deleting it would have
+  locked the owner out of the developer dashboard entirely.
+  The real Manager account is FRANCIS B SAM, created by the owner through the
+  Developer dashboard - it lives in each device's own storage, not in seed
+  data, so it is unaffected by this change.
+
+MIGRATION (important)
+  Editing INITIAL_USERS alone only affects a brand-new install. Any device that
+  already ran the app has the demo accounts saved in localStorage under
+  'puremax_users_official_v5', so they would have reappeared. AppContext now
+  strips them on boot:
+    - users state filters out LEGACY_DEMO_EMPLOYEE_IDS, then immediately
+      re-writes the cleaned list to localStorage so it is permanent
+    - staffLiveLocations drops any pin whose employeeId/userId belongs to a
+      demo account, and any pin without real numeric lat/lng
+  Exported from initialData.ts: LEGACY_DEMO_EMPLOYEE_IDS
+
+GPS MAP (src/components/fleet/FleetMapModule.tsx) — REMOVED
+  - Deleted the MAKENI_ROUTES waypoint table (4 fabricated Makeni routes used
+    only to animate fake vehicles)
+  - Deleted the movement simulation interval, its state (isSimulating,
+    simulationSpeedMultiplier, simStepIndicesRef)
+  - Deleted the "Simulation Paused / Live Movement Active" and "1x/2x/4x"
+    toolbar buttons
+  - Removed the invented fallback statuses ('Active / Selling', 'En Route',
+    'Active Tracking'); an account with no fix now reports 'Unknown'
+  - activeDeliveryStaff now filters to
+        staff.isLiveDeviceGps && staff.lat !== null && staff.lng !== null
+    so ONLY accounts streaming real hardware GPS from their own device appear.
+    Registered-but-offline accounts are not plotted at all.
+
+DEMO DATA
+  All record seed arrays (attendance, sales, production, outer/roll buyings,
+  expenses, repairs, fuel, equipment logs, announcements, chat) were already
+  empty. No demo records existed and none were added.
+
+VERIFICATION
+  - grep for Brima Sesay / Alusine Kamara / Alpha Koroma / Ibrahim Conteh /
+    Mohamed Kamara across src/ returns nothing.
+  - tsc --noEmit passes with zero errors.
+================================================================================

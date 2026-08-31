@@ -29,6 +29,7 @@ import {
 } from '../types';
 import {
   INITIAL_USERS,
+  LEGACY_DEMO_EMPLOYEE_IDS,
   INITIAL_ATTENDANCE,
   INITIAL_SALES,
   INITIAL_PRODUCTION,
@@ -222,17 +223,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Load official users from localStorage or default (Only Developer account by default, plus any new staff created by manager)
+  // Removing the placeholder/demo accounts from INITIAL_USERS only affects a
+  // brand-new install. Any phone or browser that already ran the app has them
+  // saved in localStorage, so they have to be filtered out on boot as well or
+  // they would simply reappear. This runs before anything renders.
   const [users, setUsers] = useState<User[]>(() => {
+    const isDemo = (u: User) => !!u && LEGACY_DEMO_EMPLOYEE_IDS.includes(u.employeeId);
+    const clean = (list: User[]) => (Array.isArray(list) ? list.filter((u) => !isDemo(u)) : []);
+
+    let initial = INITIAL_USERS;
     const saved = localStorage.getItem('puremax_users_official_v5');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = clean(parsed);
+          // Persist the cleaned list straight away so the demo accounts are
+          // gone for good rather than being re-filtered on every boot.
+          if (cleaned.length !== parsed.length) {
+            try {
+              localStorage.setItem('puremax_users_official_v5', JSON.stringify(cleaned));
+            } catch {
+              /* non-fatal: the in-memory list is still clean */
+            }
+          }
+          initial = cleaned;
+        }
       } catch {
-        return INITIAL_USERS;
+        initial = INITIAL_USERS;
       }
     }
-    return INITIAL_USERS;
+    return clean(initial);
   });
 
   // Persistent User Session: Restored across page refresh and offline sessions
@@ -854,7 +875,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Real-Time GPS Tracking for Logged-In Tricycle Staff & Van Staff Only
   const [staffLiveLocations, setStaffLiveLocations] = useState<StaffLiveLocation[]>(() => {
     const saved = localStorage.getItem('puremax_staff_live_locations');
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      // Drop any GPS pin left behind by a demo account, plus anything with no
+      // real coordinates. Only genuine hardware fixes may reach the map.
+      return parsed.filter(
+        (loc: StaffLiveLocation) =>
+          loc &&
+          !LEGACY_DEMO_EMPLOYEE_IDS.includes(loc.employeeId) &&
+          !['u-trc-1', 'u-trc-2', 'u-van-1', 'u-van-2', 'u-mgr-1'].includes(loc.userId) &&
+          typeof loc.lat === 'number' &&
+          typeof loc.lng === 'number'
+      );
+    } catch {
+      return [];
+    }
   });
 
   useEffect(() => {

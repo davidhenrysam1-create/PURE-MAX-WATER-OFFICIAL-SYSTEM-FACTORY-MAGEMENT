@@ -114,48 +114,6 @@ export const getFleetVehicleType = (user: User | null | undefined): 'tricycle_st
   return 'tricycle_staff';
 };
 
-// Authentic Makeni, Sierra Leone Route Waypoints for realistic simulation
-const MAKENI_ROUTES = [
-  // Route 0: Mabanta Road ➔ Makeni Clock Tower ➔ Campbell St ➔ Rogbaneh Rd
-  [
-    { lat: 8.8858, lng: -12.0441, name: 'Pure Max Factory Depot (Mabanta Rd)' },
-    { lat: 8.8872, lng: -12.0465, name: 'Mabanta Market Junction' },
-    { lat: 8.8885, lng: -12.0480, name: 'Makeni Clock Tower Plaza' },
-    { lat: 8.8860, lng: -12.0505, name: 'Campbell Street Retail Shops' },
-    { lat: 8.8835, lng: -12.0470, name: 'St. Francis Junction' },
-    { lat: 8.8820, lng: -12.0435, name: 'Rogbaneh Road Commercial Kiosks' },
-    { lat: 8.8845, lng: -12.0425, name: 'Sachet Wholesale Center' },
-  ],
-  // Route 1: Azzolini Highway ➔ Central Market ➔ Station Road ➔ Magburaka Highway
-  [
-    { lat: 8.8820, lng: -12.0490, name: 'Azzolini Highway Distribution Hub' },
-    { lat: 8.8845, lng: -12.0455, name: 'Government Hospital Junction' },
-    { lat: 8.8870, lng: -12.0420, name: 'Makeni Central Market' },
-    { lat: 8.8905, lng: -12.0460, name: 'Station Road Depot' },
-    { lat: 8.8880, lng: -12.0395, name: 'Magburaka Highway Sachet Point' },
-    { lat: 8.8840, lng: -12.0380, name: 'East End Commercial Hub' },
-    { lat: 8.8805, lng: -12.0430, name: 'Azzolini South Link' },
-  ],
-  // Route 2: Teko Barracks Road ➔ Wusum Stadium ➔ Independence Ave ➔ Sachet Depot
-  [
-    { lat: 8.8890, lng: -12.0390, name: 'Teko Barracks Road Wholesale' },
-    { lat: 8.8865, lng: -12.0415, name: 'Teko Junction Retail' },
-    { lat: 8.8840, lng: -12.0430, name: 'Wusum Stadium Entrance' },
-    { lat: 8.8875, lng: -12.0485, name: 'Independence Avenue Shops' },
-    { lat: 8.8920, lng: -12.0510, name: 'Mena Hills Corner' },
-    { lat: 8.8895, lng: -12.0450, name: 'Teachers College Road' },
-  ],
-  // Route 3: Panlap Junction ➔ Lunsar Highway ➔ Mabanta West ➔ Clock Tower
-  [
-    { lat: 8.8790, lng: -12.0530, name: 'Panlap Junction Commercial Post' },
-    { lat: 8.8815, lng: -12.0480, name: 'Lunsar Highway Distribution' },
-    { lat: 8.8845, lng: -12.0475, name: 'Mabanta West Grocery Depot' },
-    { lat: 8.8885, lng: -12.0480, name: 'Clock Tower Plaza' },
-    { lat: 8.8850, lng: -12.0410, name: 'Hospital Road Corner' },
-    { lat: 8.8810, lng: -12.0450, name: 'Panlap Link Road' },
-  ],
-];
-
 export const FleetMapModule: React.FC = () => {
   const {
     currentUser,
@@ -184,16 +142,6 @@ export const FleetMapModule: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterRole, setFilterRole] = useState<'all' | 'tricycle_staff' | 'van_staff'>('all');
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Simulation controls state
-  // ISSUE #7: mock/demo vehicle movement is OFF by default. It used to boot with
-  // `useState(true)`, so every registered tricycle and van immediately began
-  // crawling along a hard-coded Makeni route — fabricated positions that looked
-  // identical to real GPS and made the live fleet view untrustworthy. Managers
-  // can still switch it on explicitly for demonstrations via the toolbar.
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [simulationSpeedMultiplier, setSimulationSpeedMultiplier] = useState<number>(1);
-  const simStepIndicesRef = useRef<Record<string, { routeIdx: number; wayptIdx: number; progress: number; stopTicks: number }>>({});
 
   // GPS Broadcaster state
   const [isLocatingMe, setIsLocatingMe] = useState(false);
@@ -288,12 +236,16 @@ export const FleetMapModule: React.FC = () => {
           speedKmH: liveLoc?.speedKmH ?? 0,
           heading: liveLoc?.heading ?? 0,
           batteryPct: liveLoc?.batteryPct ?? 90,
-          status: liveLoc?.status ?? (isCurrentLoggedIn ? 'Active / Selling' : 'En Route'),
-          lastUpdated: liveLoc?.lastUpdated ?? (isCurrentLoggedIn ? 'Logged In Now' : 'Active Tracking'),
+          status: liveLoc?.status ?? 'Unknown',
+          lastUpdated: liveLoc?.lastUpdated ?? '',
           isLiveDeviceGps: liveLoc?.isLiveDeviceGps ?? false,
           todayBundles,
         };
       })
+      // Only accounts with a REAL hardware GPS fix from their own device are
+      // plotted. Registered-but-offline accounts are excluded entirely rather
+      // than being parked at an invented position.
+      .filter((staff) => staff.isLiveDeviceGps && staff.lat !== null && staff.lng !== null)
       .filter((staff) => {
         if (filterRole === 'all') return true;
         return staff.userRole === filterRole;
@@ -320,123 +272,7 @@ export const FleetMapModule: React.FC = () => {
     return activeDeliveryStaff.find((s) => s.userId === selectedStaffId) || null;
   }, [selectedStaffId, staffWithLocations, activeDeliveryStaff]);
 
-  // 2. Real-Time Movement Simulation Engine for Makeni Routes
-  useEffect(() => {
-    if (!isSimulating) return;
 
-    const intervalMs = Math.max(800, 2400 / simulationSpeedMultiplier);
-
-    const timer = setInterval(() => {
-      const currentStaffList = deliveryStaffUsersRef.current;
-      if (!currentStaffList || currentStaffList.length === 0) return;
-
-      const currentLiveLocs = staffLiveLocationsRef.current || [];
-      const loggedUser = currentUserRef.current;
-      const batchUpdates: Array<Parameters<typeof updateStaffLiveLocation>[0]> = [];
-
-      currentStaffList.forEach((user, userIdx) => {
-        // CRITICAL: NEVER simulate or mock the logged-in device's location
-        if (loggedUser && loggedUser.id === user.id) {
-          return;
-        }
-
-        const liveLoc = currentLiveLocs.find((l) => l.userId === user.id);
-
-        // Do not simulate if user has active real hardware GPS stream
-        if (liveLoc?.isLiveDeviceGps) {
-          return;
-        }
-
-        const vehicleType = getFleetVehicleType(user);
-        const routeIdx = userIdx % MAKENI_ROUTES.length;
-        const route = MAKENI_ROUTES[routeIdx];
-
-        // Retrieve or initialize step state from ref
-        const current = simStepIndicesRef.current[user.id] || {
-          routeIdx,
-          wayptIdx: (userIdx * 2) % route.length,
-          progress: 0.1,
-          stopTicks: 0,
-        };
-
-        let { wayptIdx, progress, stopTicks } = current;
-
-        let status: 'Active / Selling' | 'En Route' | 'Stationary' = 'En Route';
-        let speedKmH = vehicleType === 'van_staff' ? Math.floor(22 + Math.random() * 14) : Math.floor(14 + Math.random() * 10);
-
-        // If stopped at a retail waypoint to sell water bundles
-        if (stopTicks > 0) {
-          stopTicks -= 1;
-          status = 'Active / Selling';
-          speedKmH = 0;
-        } else {
-          // Step progress
-          progress += 0.12 * simulationSpeedMultiplier;
-
-          if (progress >= 1.0) {
-            progress = 0;
-            wayptIdx = (wayptIdx + 1) % route.length;
-            // 40% chance of making a retail sales drop-off stop
-            if (Math.random() < 0.45) {
-              stopTicks = Math.floor(3 + Math.random() * 3);
-              status = 'Active / Selling';
-              speedKmH = 0;
-            }
-          }
-        }
-
-        const currentWaypt = route[wayptIdx];
-        const nextWaypt = route[(wayptIdx + 1) % route.length];
-
-        // Linear interpolation between waypoints
-        const lat = currentWaypt.lat + (nextWaypt.lat - currentWaypt.lat) * progress;
-        const lng = currentWaypt.lng + (nextWaypt.lng - currentWaypt.lng) * progress;
-
-        // Calculate heading
-        const dLng = nextWaypt.lng - currentWaypt.lng;
-        const dLat = nextWaypt.lat - currentWaypt.lat;
-        const heading = Math.round(((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360);
-
-        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-        // Update ref
-        simStepIndicesRef.current[user.id] = {
-          routeIdx,
-          wayptIdx,
-          progress,
-          stopTicks,
-        };
-
-        batchUpdates.push({
-          userId: user.id,
-          employeeId: user.employeeId,
-          userName: user.name,
-          userRole: vehicleType,
-          avatarUrl: user.avatarUrl,
-          phone: user.phone,
-          lat,
-          lng,
-          accuracyMeters: 6,
-          speedKmH,
-          heading,
-          batteryPct: 88 + (userIdx % 10),
-          status: status === 'Active / Selling' ? 'Stationary / Delivering' : 'Online & Moving',
-          lastUpdated: timeStr,
-          isLiveDeviceGps: false,
-        });
-      });
-
-      if (batchUpdates.length > 0) {
-        updateMultipleStaffLocations(batchUpdates);
-      }
-    }, intervalMs);
-
-    return () => clearInterval(timer);
-  }, [
-    isSimulating,
-    simulationSpeedMultiplier,
-    updateMultipleStaffLocations,
-  ]);
 
   // Generate InfoWindow / Popup HTML
   const generateStaffPopupHTML = useCallback((staff: typeof activeDeliveryStaff[0]) => {
@@ -1172,30 +1008,6 @@ export const FleetMapModule: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          {/* Simulation Toggle Controls */}
-          <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm text-xs font-semibold">
-            <button
-              onClick={() => setIsSimulating(!isSimulating)}
-              className={`px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 transition cursor-pointer ${
-                isSimulating
-                  ? 'bg-emerald-600 text-white font-bold'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-              }`}
-              title={isSimulating ? 'Pause Route Simulation' : 'Resume Route Simulation'}
-            >
-              {isSimulating ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isSimulating ? 'Live Movement Active' : 'Simulation Paused'}</span>
-            </button>
-            <button
-              onClick={() => setSimulationSpeedMultiplier((prev) => (prev === 1 ? 2 : prev === 2 ? 4 : 1))}
-              className="px-2 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-mono text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-              title="Simulation Speed Multiplier"
-            >
-              <FastForward className="w-3 h-3" />
-              <span>{simulationSpeedMultiplier}x</span>
-            </button>
-          </div>
-
           {/* Map Engine Switcher */}
           <div className="flex items-center gap-1 p-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm text-xs font-semibold">
             <button
