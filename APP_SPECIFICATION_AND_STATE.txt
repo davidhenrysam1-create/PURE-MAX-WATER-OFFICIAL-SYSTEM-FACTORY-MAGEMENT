@@ -1347,3 +1347,84 @@ VERIFICATION (clean clone from GitHub)
   tsc --noEmit         -> exit 0, zero errors
   npm run build        -> success
 ================================================================================
+
+================================================================================
+SESSION — Purge did not stick when online + profile picture not permanent
+================================================================================
+Two owner reports:
+  "THE DELETE ALL PRODUCTION RECORDERS AND THE DELETE ALL PRODUCTION SALES
+   RECORDS IS NOT WORKING IT ONLY WORK IN OFFLINE MOOD WHEN DEVICE IS CONNECTED
+   ALL RECORDS WILL APPER AGAIN"
+  "THE PROFILE PICTURE IS NOT STILL SAVING PICTURE PERMANTALY"
+
+--------------------------------------------------------------------------------
+1. PURGE / RESET CAME BACK ON RECONNECT — ROOT CAUSE
+--------------------------------------------------------------------------------
+purgeRecordsByRole() contained NO server call whatsoever. It only called
+setX(split.kept) on local React state. The rows stayed in Postgres, so the next
+refreshCloudData() fetched them again and merged them straight back in. The
+purge looked like it worked while offline and silently undid itself the moment
+the device reconnected.
+
+The same applied to resetAttendance() and resetProductionRecords(): both POSTed
+to /api/*-reset-archive, which only inserts an audit log and deletes nothing.
+
+FIX — three layers:
+
+a) SERVER-SIDE DELETION (the actual fix)
+   server.ts gains two endpoints:
+     POST /api/purge-by-role     { employeeIds[], names[] }
+     POST /api/production-reset
+   Matching is by STAFF IDENTITY (employeeId / author name), never by record id,
+   because a row created offline carries a client-generated id that does not
+   exist server-side. Tables swept: salesRecords (staffName), productionBatches
+   (operatorName), attendance (employeeId + name), expenses (recordedBy),
+   outerBuyings & rollBuyings (engineerId + engineerName), repairs (reportedBy +
+   technicianName), fuelLogs (driverName), equipmentLogs (operatorId +
+   operatorName).
+   resetAttendance() now also calls the pre-existing /api/attendance-reset,
+   which really does `db.delete(attendance)`.
+
+b) TOMBSTONES (offline / no-backend safety net)
+   localStorage key `puremax_purge_tombstones_v1` maps an identity (employeeId
+   OR author name) to the ISO timestamp of the purge. refreshCloudData() now
+   runs every incoming server collection through filterTombstoned(), dropping
+   rows authored by a purged identity whose date predates the purge. Records
+   created AFTER a purge are kept, so purging a role does not freeze them out
+   of future work.
+   Applied to: attendance, sales, production, outerBuyings, rollBuyings,
+   expenses, repairs, fuel, equipmentLogs.
+
+c) Ordering preserved — archive first, then delete, so a failure mid-way still
+   leaves the Excel/IndexedDB backup intact.
+
+--------------------------------------------------------------------------------
+2. PROFILE PICTURE NOT PERSISTING — ROOT CAUSE
+--------------------------------------------------------------------------------
+getCachedAvatar() read IndexedDB ONLY, and rehydrateAvatars() depends on it.
+So when the IndexedDB write failed — or IDB was unavailable entirely, as in a
+sandboxed AI Studio iframe — the picture was lost on reload even though the
+localStorage mirror still had a perfectly good copy. The mirror was written but
+never read back on the async path.
+
+FIX:
+  - getCachedAvatar() now resolves in order: session cache -> IndexedDB ->
+    localStorage mirror, and back-fills the session cache on the way through.
+  - rehydrateAvatars() now resolves field-first via resolveAvatarUrl() before
+    falling back to the async lookup.
+  - Avatar uploads recompressed from 500px/q0.75 to 320px/q0.72 webp. At 500px
+    each picture was 40-100 KB, enough to trip the shared ~5 MB localStorage
+    quota and make the stripAvatars() guard discard every picture on save.
+    320px lands around 10-20 KB and is still much larger than any avatar is
+    displayed, so it persists through the same path that already keeps accounts.
+
+Net effect: the picture now survives a refresh via whichever of the four tiers
+is available (inline field, session cache, localStorage mirror, IndexedDB), and
+survives in-app navigation via the session tier regardless of storage policy.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0, zero errors
+  npm run build -> success
+================================================================================

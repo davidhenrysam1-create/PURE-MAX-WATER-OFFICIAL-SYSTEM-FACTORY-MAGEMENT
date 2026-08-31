@@ -271,6 +271,65 @@ export const dedupeAttendance = <T extends { userId?: string; employeeId?: strin
   return Array.from(byKey.values());
 };
 
+/**
+ * Tombstones for locally-purged staff.
+ *
+ * When the server is unreachable the purge still clears local state, but the
+ * next successful sync would re-download those rows and silently undo it. A
+ * tombstone records WHO was purged and WHEN; refreshCloudData drops any record
+ * authored by that employee that predates the purge, while records created
+ * afterwards are kept.
+ */
+const TOMBSTONE_KEY = 'puremax_purge_tombstones_v1';
+
+type Tombstones = Record<string, string>; // employeeId -> ISO timestamp
+
+const readTombstones = (): Tombstones => {
+  try {
+    const raw = localStorage.getItem(TOMBSTONE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeTombstones = (t: Tombstones) => {
+  try {
+    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(t));
+  } catch {
+    /* non-fatal */
+  }
+};
+
+/** Record that these employees were purged right now. */
+const tombstoneEmployees = (identities: string[]) => {
+  if (!identities.length) return;
+  const now = new Date().toISOString();
+  const t = readTombstones();
+  identities.forEach((id) => {
+    if (id && String(id).trim()) t[String(id).trim()] = now;
+  });
+  writeTombstones(t);
+};
+
+/** True when a record authored by `employeeId` predates their purge. */
+const isTombstoned = (identity?: string | null, recordDate?: string | null): boolean => {
+  if (!identity) return false;
+  const t = readTombstones();
+  const cut = t[String(identity).trim()];
+  if (!cut) return false;
+  if (!recordDate) return true;
+  return String(recordDate) <= cut.slice(0, 10);
+};
+
+/** Drop any server row that belongs to a staff member purged earlier. */
+const filterTombstoned = <T extends Record<string, any>>(
+  rows: T[],
+  identityOf: (r: T) => Array<string | undefined | null>,
+  dateOf: (r: T) => string | undefined | null
+): T[] => rows.filter((r) => !identityOf(r).some((id) => isTombstoned(id, dateOf(r))));
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Collections with hardened try-catch JSON parsing
   const safeLoad = <T,>(key: string, fallback: T): T => {
@@ -913,6 +972,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     });
 
+    // Make the purge stick. Without this the rows came straight back on the
+    // next sync, because only React state had been cleared.
+    const purgedIds = staff.map((u) => u.employeeId).filter(Boolean);
+    const purgedNames = staff.map((u) => u.name).filter(Boolean);
+    tombstoneEmployees([...purgedIds, ...purgedNames]);
+
+    fetch('/api/purge-by-role', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, employeeIds: purgedIds, names: purgedNames }),
+    }).catch(() => {
+      /* offline / static deploy - tombstones keep the purge in force locally */
+    });
+
     setSales(salesSplit.kept);
     setProduction(productionSplit.kept);
     setAttendance(attendanceSplit.kept);
@@ -1159,10 +1232,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             notes: a.notes || '',
             approvedBy: a.verifiedBy || a.verified_by || a.approvedBy,
           }));
+          const surviving = filterTombstoned(
+            mapped,
+            (r) => [r.employeeId, r.userName],
+            (r) => r.date
+          );
           setAttendance((prevLocal) =>
             // Keyed on (user, date), NOT id - a local `att-<epoch>` row and
             // the server's numeric row are the same shift and must collapse.
-            dedupeAttendance([...(prevLocal || []), ...mapped])
+            dedupeAttendance([...(prevLocal || []), ...surviving])
           );
         }
       }
@@ -1170,9 +1248,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (salesRes.status === 'fulfilled' && salesRes.value.ok) {
         const pgSales = await salesRes.value.json();
         if (Array.isArray(pgSales)) {
+          const surviving = filterTombstoned(pgSales, (r) => [r.staffName], (r) => r.date);
           setSales((prevLocal) => {
             const map = new Map();
-            pgSales.forEach((s: any) => map.set(s.id, s));
+            surviving.forEach((s: any) => map.set(s.id, s));
             prevLocal.forEach((s: any) => map.set(s.id, s));
             return Array.from(map.values());
           });
@@ -1182,9 +1261,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (prodRes.status === 'fulfilled' && prodRes.value.ok) {
         const pgProd = await prodRes.value.json();
         if (Array.isArray(pgProd)) {
+          const surviving = filterTombstoned(
+            pgProd,
+            (r: any) => [r.operatorName, r.operatorId, r.engineerId],
+            (r: any) => r.date
+          );
           setProduction((prevLocal) => {
             const map = new Map();
-            pgProd.forEach((p: any) => map.set(p.id, p));
+            surviving.forEach((p: any) => map.set(p.id, p));
             prevLocal.forEach((p: any) => map.set(p.id, p));
             return Array.from(map.values());
           });
@@ -1194,9 +1278,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (outBuyRes.status === 'fulfilled' && outBuyRes.value.ok) {
         const pgOutBuy = await outBuyRes.value.json();
         if (Array.isArray(pgOutBuy)) {
+          const surviving = filterTombstoned(pgOutBuy, (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
           setOuterBuyings((prevLocal) => {
             const map = new Map();
-            pgOutBuy.forEach((o: any) => map.set(o.id, o));
+            surviving.forEach((o: any) => map.set(o.id, o));
             prevLocal.forEach((o: any) => map.set(o.id, o));
             return Array.from(map.values());
           });
@@ -1206,9 +1291,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (rollBuyRes.status === 'fulfilled' && rollBuyRes.value.ok) {
         const pgRollBuy = await rollBuyRes.value.json();
         if (Array.isArray(pgRollBuy)) {
+          const surviving = filterTombstoned(pgRollBuy, (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
           setRollBuyings((prevLocal) => {
             const map = new Map();
-            pgRollBuy.forEach((r: any) => map.set(r.id, r));
+            surviving.forEach((r: any) => map.set(r.id, r));
             prevLocal.forEach((r: any) => map.set(r.id, r));
             return Array.from(map.values());
           });
@@ -1230,9 +1316,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (expRes.status === 'fulfilled' && expRes.value.ok) {
         const pgExp = await expRes.value.json();
         if (Array.isArray(pgExp)) {
+          const surviving = filterTombstoned(pgExp, (r: any) => [r.recordedBy, r.recordedById], (r: any) => r.date);
           setExpenses((prevLocal) => {
             const map = new Map();
-            pgExp.forEach((e: any) => map.set(e.id, e));
+            surviving.forEach((e: any) => map.set(e.id, e));
             prevLocal.forEach((e: any) => map.set(e.id, e));
             return Array.from(map.values());
           });
@@ -1242,9 +1329,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (repRes.status === 'fulfilled' && repRes.value.ok) {
         const pgRep = await repRes.value.json();
         if (Array.isArray(pgRep)) {
+          const surviving = filterTombstoned(pgRep, (r: any) => [r.reportedBy, r.technicianName, r.engineerId], (r: any) => r.dateReported || r.date);
           setRepairs((prevLocal) => {
             const map = new Map();
-            pgRep.forEach((r: any) => map.set(r.id, r));
+            surviving.forEach((r: any) => map.set(r.id, r));
             prevLocal.forEach((r: any) => map.set(r.id, r));
             return Array.from(map.values());
           });
@@ -1254,9 +1342,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (fuelRes.status === 'fulfilled' && fuelRes.value.ok) {
         const pgFuel = await fuelRes.value.json();
         if (Array.isArray(pgFuel)) {
+          const surviving = filterTombstoned(pgFuel, (r: any) => [r.driverName, r.engineerId], (r: any) => r.date);
           setFuel((prevLocal) => {
             const map = new Map();
-            pgFuel.forEach((f: any) => map.set(f.id, f));
+            surviving.forEach((f: any) => map.set(f.id, f));
             prevLocal.forEach((f: any) => map.set(f.id, f));
             return Array.from(map.values());
           });
@@ -1266,9 +1355,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (eqRes.status === 'fulfilled' && eqRes.value.ok) {
         const pgEq = await eqRes.value.json();
         if (Array.isArray(pgEq)) {
+          const survivingEq = filterTombstoned(pgEq, (r: any) => [r.operatorId, r.operatorName], (r: any) => r.date);
           setEquipmentLogs((prevLocal) => {
             const map = new Map();
-            pgEq.forEach((e: any) => map.set(e.id, e));
+            survivingEq.forEach((e: any) => map.set(e.id, e));
             prevLocal.forEach((e: any) => map.set(e.id, e));
             return Array.from(map.values());
           });
@@ -2497,10 +2587,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     // 3. best-effort server copy
+    // Backup archive (audit trail only - deletes nothing).
     fetch('/api/production-reset-archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(archive),
+    }).catch(() => {});
+
+    // THE ACTUAL SERVER DELETE. Without this the wipe was local-only and every
+    // batch came straight back on the next background sync.
+    fetch('/api/production-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
     }).catch(() => {});
 
     // 4. now clear live state

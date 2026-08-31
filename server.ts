@@ -713,6 +713,105 @@ const recordResetArchive = async (kind: string, req: Request, res: Response) => 
   }
 };
 
+/**
+ * Server-side purge of every record belonging to a set of staff.
+ *
+ * The client-side purge alone was not enough: it only cleared React state, so
+ * the next background refresh re-fetched the rows from Postgres and they
+ * reappeared as soon as the device was back online. Deleting here makes the
+ * purge stick.
+ *
+ * Matching is by STAFF IDENTITY (employeeId / author name), not by local record
+ * id, because a row created offline carries a client-generated id that never
+ * exists server-side.
+ */
+app.post('/api/purge-by-role', async (req: Request, res: Response) => {
+  try {
+    const employeeIds: string[] = Array.isArray(req.body?.employeeIds) ? req.body.employeeIds : [];
+    const names: string[] = Array.isArray(req.body?.names) ? req.body.names : [];
+    const ids = employeeIds.filter((v) => typeof v === 'string' && v.trim());
+    const who = names.filter((v) => typeof v === 'string' && v.trim());
+
+    if (ids.length === 0 && who.length === 0) {
+      return res.status(400).json({ error: 'employeeIds or names is required' });
+    }
+
+    const deleted: Record<string, number> = {};
+    const run = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        const n = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+        deleted[label] = n;
+      } catch (err) {
+        console.warn(`purge-by-role: ${label} failed`, err);
+        deleted[label] = 0;
+      }
+    };
+
+    if (who.length) {
+      await run('sales', () => db.delete(salesRecords).where(inArray(salesRecords.staffName, who)).returning());
+      await run('production', () => db.delete(productionBatches).where(inArray(productionBatches.operatorName, who)).returning());
+      await run('expenses', () => db.delete(expenses).where(inArray(expenses.recordedBy, who)).returning());
+      await run('fuel', () => db.delete(fuelLogs).where(inArray(fuelLogs.driverName, who)).returning());
+    }
+    if (ids.length) {
+      await run('attendance', () => db.delete(attendance).where(inArray(attendance.employeeId, ids)).returning());
+    }
+    if (who.length) {
+      await run('attendanceByName', () => db.delete(attendance).where(inArray(attendance.name, who)).returning());
+      await run('repairs', () =>
+        db.delete(repairs).where(or(inArray(repairs.reportedBy, who), inArray(repairs.technicianName, who))).returning()
+      );
+    }
+    if (ids.length) {
+      await run('outerBuyings', () =>
+        db.delete(outerBuyings).where(or(inArray(outerBuyings.engineerId, ids), inArray(outerBuyings.engineerName, who.length ? who : ['__none__']))).returning()
+      );
+      await run('rollBuyings', () =>
+        db.delete(rollBuyings).where(or(inArray(rollBuyings.engineerId, ids), inArray(rollBuyings.engineerName, who.length ? who : ['__none__']))).returning()
+      );
+      await run('equipmentLogs', () =>
+        db.delete(equipmentLogs).where(or(inArray(equipmentLogs.operatorId, ids), inArray(equipmentLogs.operatorName, who.length ? who : ['__none__']))).returning()
+      );
+    }
+
+    broadcastDbChange('purge_by_role', 'delete', { employeeIds: ids, names: who, deleted });
+    res.json({ success: true, deleted });
+  } catch (err) {
+    console.error('Error purging records by role:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+/**
+ * Full production reset, server side. Without this the client cleared its own
+ * state and then re-downloaded every batch on the next sync.
+ */
+app.post('/api/production-reset', async (req: Request, res: Response) => {
+  try {
+    const out: Record<string, number> = {};
+    const wipe = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        out[label] = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+      } catch (err) {
+        console.warn(`production-reset: ${label} failed`, err);
+        out[label] = 0;
+      }
+    };
+    await wipe('production', () => db.delete(productionBatches).returning());
+    await wipe('outerBuyings', () => db.delete(outerBuyings).returning());
+    await wipe('rollBuyings', () => db.delete(rollBuyings).returning());
+    await wipe('packagingRolls', () => db.delete(packagingRolls).returning());
+
+    broadcastDbChange('production_reset', 'delete', out);
+    res.json({ success: true, deleted: out });
+  } catch (err) {
+    console.error('Error resetting production records:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post('/api/attendance-reset-archive', (req, res) => recordResetArchive('ATTENDANCE', req, res));
 app.post('/api/production-reset-archive', (req, res) => recordResetArchive('PRODUCTION', req, res));
 

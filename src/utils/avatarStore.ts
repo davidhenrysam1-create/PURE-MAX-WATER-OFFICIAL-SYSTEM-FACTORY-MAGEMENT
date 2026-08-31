@@ -115,12 +115,27 @@ export async function getCachedAvatar(employeeId?: string): Promise<string | und
   const fromSession = sessionAvatarCache.get(employeeId);
   if (isUsable(fromSession)) return fromSession;
 
+  // IndexedDB first (authoritative, unbounded) ...
   try {
     const value = await idbStorage.getMediaItem(mirrorKey(employeeId));
-    return isUsable(value) ? value : undefined;
+    if (isUsable(value)) {
+      sessionAvatarCache.set(employeeId, value);
+      return value;
+    }
   } catch {
-    return undefined;
+    /* fall through */
   }
+
+  // ... then the localStorage mirror. Previously this tier was never consulted
+  // on the async read path, so a failed/unavailable IndexedDB write meant the
+  // picture was gone on reload even though the mirror still held it.
+  const mirrored = getCachedAvatarSync(employeeId);
+  if (isUsable(mirrored)) {
+    sessionAvatarCache.set(employeeId, mirrored);
+    return mirrored;
+  }
+
+  return undefined;
 }
 
 export function removeCachedAvatar(employeeId: string): void {
@@ -161,7 +176,10 @@ export function stripAvatars<T extends AvatarCarrier>(users: T[]): T[] {
 export async function rehydrateAvatars<T extends AvatarCarrier>(users: T[]): Promise<T[]> {
   return Promise.all(
     users.map(async (u) => {
-      if (isUsable(u.avatarUrl)) return u;
+      // Field first (may have been persisted inline), then session, then
+      // localStorage mirror, then IndexedDB.
+      const existing = resolveAvatarUrl(u);
+      if (isUsable(existing)) return { ...u, avatarUrl: existing };
       const cached = await getCachedAvatar(u.employeeId);
       return cached ? { ...u, avatarUrl: cached } : u;
     })

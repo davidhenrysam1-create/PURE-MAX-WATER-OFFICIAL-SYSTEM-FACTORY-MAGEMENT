@@ -254,7 +254,12 @@ export const ProfileModal: React.FC = () => {
         if (file.size > 2 * 1024 * 1024) {
           showToast('Compressing profile avatar...', 'info', 'Avatar Optimization');
         }
-        const compressed = await compressImage(file, { maxWidth: 500, maxHeight: 500, quality: 0.75, mimeType: 'image/webp' });
+        // Avatars are stored inline with the user record, and localStorage is shared
+        // across the whole app (~5 MB). 500px webp ran 40-100 KB each, which was
+        // big enough to trip the quota guard and get every picture stripped on
+        // save. 320px is still far larger than any avatar is displayed, and
+        // lands around 10-20 KB so it persists reliably.
+        const compressed = await compressImage(file, { maxWidth: 320, maxHeight: 320, quality: 0.72, mimeType: 'image/webp' });
         if (compressed) {
           setAvatarUrl(compressed);
           setInfoSuccess('📸 Profile picture uploaded & optimized! Click "Save Profile Updates" to apply.');
