@@ -680,6 +680,17 @@ app.get('/api/attendance', async (req: Request, res: Response) => {
   }
 });
 
+
+app.post('/api/attendance-reset', async (req, res) => {
+  try {
+    await db.delete(attendance);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error resetting attendance:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post('/api/attendance', async (req: Request, res: Response) => {
   try {
     const data = req.body;

@@ -148,6 +148,7 @@ interface AppContextType {
   approveAttendance: (attendanceId: string, approved: boolean) => void;
   approveCheckOut: (attendanceId: string, approved: boolean) => void;
   resetAttendance: (password: string) => boolean;
+  resetMaterialBuyings: (password: string) => boolean;
   overrideSalary: (userId: string, newMonthlyLe: number, reason: string) => void;
 
   // Sales
@@ -766,7 +767,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
     }
 
-    const owns = (id?: string | null) => !!id && staffIds.has(id);
+    // Include records with no ID (like dummy demo data) in the purge
+    const owns = (id?: string | null) => !id || staffIds.has(id) || id === 'demo' || id === 'system';
 
     const partition = (list: any[], predicate: (item: any) => boolean) => {
       const removed: any[] = [];
@@ -781,15 +783,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
     const productionSplit = partition(
       production,
-      (r) => owns(r.engineerId) || owns(r.operatorId)
+      (r) => scope === 'production_engineer' || owns(r.engineerId) || owns(r.operatorId)
     );
     const attendanceSplit = partition(
       attendance,
       (r) => owns(r.userId) || r.userRole === targetRole
     );
     const expensesSplit = partition(expenses, (r) => owns(r.recordedById));
-    const outerSplit = partition(outerBuyings, (r) => owns(r.engineerId));
-    const rollSplit = partition(rollBuyings, (r) => owns(r.engineerId));
+    const outerSplit = partition(outerBuyings, (r) => scope === 'production_engineer' || owns(r.engineerId));
+    const rollSplit = partition(rollBuyings, (r) => scope === 'production_engineer' || owns(r.engineerId));
     const repairsSplit = partition(repairs, (r) => owns(r.engineerId));
     const fuelSplit = partition(fuel, (r) => owns(r.engineerId));
     const equipmentSplit = partition(equipmentLogs, (r) => owns(r.operatorId));
@@ -2098,18 +2100,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // tap (or a background re-sync) produced a duplicate row in the approval
     // queue. One user may only ever have ONE open (un-checked-out) record per
     // day; if they already checked out, a new session is legitimate.
-    const openToday = attendance.find(
-      (a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOutTime
-    );
-    if (openToday) {
-      showToast(
-        `You already checked in today at ${openToday.checkInTime}. Duplicate check-in blocked.`,
-        'warning',
-        'Already Checked In'
-      );
-      return;
-    }
-
     const newRec: AttendanceRecord = {
       id: `att-${Date.now()}`,
       userId: currentUser.id,
@@ -2123,7 +2113,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       shift: 'morning',
       notes,
     };
-    setAttendance((prev) => [newRec, ...prev]);
+
+    let isDuplicate = false;
+    let existingCheckIn = '';
+    setAttendance((prev) => {
+      const openToday = prev.find(
+        (a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOutTime
+      );
+      if (openToday) {
+        isDuplicate = true;
+        existingCheckIn = openToday.checkInTime;
+        return prev;
+      }
+      return [newRec, ...prev];
+    });
+
+    if (isDuplicate) {
+      showToast(
+        `You already checked in today at ${existingCheckIn}. Duplicate check-in blocked.`,
+        'warning',
+        'Already Checked In'
+      );
+      return;
+    }
+
     logAudit('ATTENDANCE_CHECKIN', `${currentUser.name} checked in at ${location}`);
 
     // Queue sync
@@ -2204,6 +2217,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         checkOutStatus: status,
         checkOutTime: target.checkOutTime,
       });
+      if (approved) {
+        fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category: 'SYSTEM',
+            targetRole: 'developer',
+            title: 'Account Approved',
+            message: `${currentUser?.name} approved the attendance account check-out for ${target.userName}.`,
+            type: 'attendance',
+            linkTab: 'Attendance & Salary'
+          })
+        }).catch(() => {});
+      }
     }
     showToast(
       `Check-out ${status === 'approved' ? 'approved' : 'rejected'}.`,
@@ -2237,6 +2264,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         verifiedBy: currentUser?.name || 'Manager',
         approvedBy: currentUser?.name || 'Manager',
       });
+      if (approved) {
+        fetch('/api/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category: 'SYSTEM',
+            targetRole: 'developer',
+            title: 'Account Approved',
+            message: `${currentUser?.name} approved the attendance account check-in for ${target.userName}.`,
+            type: 'attendance',
+            linkTab: 'Attendance & Salary'
+          })
+        }).catch(() => {});
+      }
     }
     logAudit('ATTENDANCE_APPROVAL', `${approved ? 'Approved' : 'Rejected'} attendance record ${attendanceId}`);
     showToast(`Attendance record ${approved ? 'approved' : 'rejected'}.`, 'info', 'Attendance Verified');
@@ -2250,6 +2291,49 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * written to IndexedDB and downloaded as an Excel workbook BEFORE anything
    * is deleted, so an interrupted reset leaves the records intact.
    */
+
+  const resetMaterialBuyings = (password: string): boolean => {
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to reset material logs.', 'error', 'Not Authorised');
+      return false;
+    }
+
+    if (!canPurgeRecords(actor.role as UserRole)) {
+      showToast('Only a Manager or Developer may reset material logs.', 'error', 'Access Denied');
+      return false;
+    }
+
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Material logs were NOT reset.', 'error', 'Verification Failed');
+      logAudit('MATERIAL_RESET_DENIED', `${actor.name} entered a wrong reset password`);
+      return false;
+    }
+
+    const outerCount = outerBuyings.length;
+    const rollCount = rollBuyings.length;
+
+    if (outerCount === 0 && rollCount === 0) {
+      showToast('There are no material buying logs to reset.', 'info', 'Nothing To Reset');
+      return false;
+    }
+
+    setOuterBuyings([]);
+    setRollBuyings([]);
+
+    logAudit(
+      'MATERIAL_LOGS_RESET',
+      `${actor.name} (${actor.employeeId}) reset ALL material logs (${outerCount} Outer, ${rollCount} Roll) after password verification`,
+      actor
+    );
+
+    showToast(
+      `Material logs reset. ${outerCount} Outer records and ${rollCount} Roll records removed.`,
+      'success',
+      'Reset Complete'
+    );
+    return true;
+  };
   const resetAttendance = (password: string): boolean => {
     const actor = currentUser;
     if (!actor) {
@@ -2312,7 +2396,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     // 3. best-effort server copy, then mutate live state
-    fetch('/api/attendance-reset-archive', {
+    fetch('/api/attendance-reset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(archive),
@@ -3234,6 +3318,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         approveAttendance,
         approveCheckOut,
         resetAttendance,
+        resetMaterialBuyings,
         overrideSalary,
         addSalesRecord,
         addProductionRecord,
