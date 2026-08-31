@@ -826,8 +826,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
     }
 
-    // Include records with no ID (like dummy demo data) in the purge
-    const owns = (id?: string | null) => !id || staffIds.has(id) || id === 'demo' || id === 'system';
+    // A record is only purged when it can be POSITIVELY attributed to the
+    // target role. The previous version opened with `!id ||`, which swept up
+    // every record that merely lacked an author id - so purging the Production
+    // Sales Officer would also have deleted unrelated expenses, repairs and
+    // fuel rows that happened to have no engineerId. Unattributable records are
+    // now left alone; 'demo' and 'system' remain explicit placeholder markers.
+    const owns = (id?: string | null) =>
+      !!id && (staffIds.has(id) || id === 'demo' || id === 'system');
 
     const partition = (list: any[], predicate: (item: any) => boolean) => {
       const removed: any[] = [];

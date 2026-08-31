@@ -1250,3 +1250,69 @@ VERIFICATION
   tsc --noEmit  -> exit 0
   npm run build -> success
 ================================================================================
+
+================================================================================
+SESSION — Repository cleanup (owner approved the three flagged items)
+================================================================================
+1. PURGE PREDICATE TIGHTENED (src/context/AppContext.tsx, purgeRecordsByRole)
+--------------------------------------------------------------------------------
+Before:
+    const owns = (id?: string | null) =>
+      !id || staffIds.has(id) || id === 'demo' || id === 'system';
+
+After:
+    const owns = (id?: string | null) =>
+      !!id && (staffIds.has(id) || id === 'demo' || id === 'system');
+
+The leading `!id ||` meant ANY record lacking an author id was treated as
+belonging to the purge target. Concretely, purging "Production Sales Officer"
+would also have deleted unrelated expenses, repairs and fuel rows that simply
+had no engineerId set. Records are now only purged when they can be positively
+attributed to the target role; 'demo' and 'system' stay as explicit placeholder
+markers. Records with no author id are left untouched.
+
+Trade-off, deliberate: this can now UNDER-delete a genuine record that is
+missing its author id. That is the safe direction — the purge archives
+everything to Excel/IndexedDB before it deletes, and leaving a record behind is
+recoverable whereas deleting an unrelated one is not.
+
+Also removed the now-contradictory leftover comment
+("Include records with no ID (like dummy demo data) in the purge").
+
+--------------------------------------------------------------------------------
+2. SCRATCH SCRIPTS DELETED (27 files)
+--------------------------------------------------------------------------------
+Removed from the repo root. All were one-off patch/edit scripts produced by
+earlier AI sessions. Verified unreferenced before deletion: no match in
+package.json, vite.config.ts, tsconfig.json, index.html, or anywhere in src/.
+
+  add_attendance_reset.cjs   fix_app.py                fix_fleet.py
+  fix_h3.py                  fix_header.py             fix_lifetime.py
+  fix_mega.py                fix_sales.py              fix_sales_modal_typos.py
+  fix_sed_error.py           fix_server.sh             fix_tri.py
+  fix_tween.js               manual_fix.py             patch_dashboard.sh
+  patch_dashboard2.sh        patch_login.sh            patch_sales_handler.sh
+  patch_sales_modal.sh       patch_sales_ui.sh         patch_server.sh
+  patch_timer.py             restore_h3.js             safe_patch_server.py
+  test_prod.js               wipe_mock.sh              wipe_mock2.sh
+  disable_sim.py
+
+--------------------------------------------------------------------------------
+3. package-lock.json REGENERATED
+--------------------------------------------------------------------------------
+The file was deleted by commit 6215e1c, leaving builds non-reproducible.
+Regenerated with `npm install`:
+    lockfileVersion = 3
+    packages        = 523
+This pins the exact dependency tree so `npm ci` produces identical installs
+across machines and in CI.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0, zero errors
+  npm run build -> success (vite build + esbuild server bundle)
+
+Note: package.json still carries the upstream template name "react-example".
+Cosmetic only; left unchanged as it was not part of this request.
+================================================================================

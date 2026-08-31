@@ -1,4 +1,0 @@
-sed -i 's/const \[vanPayment, setVanPayment\] = useState<\x27cash\x27 | \x27credit\x27 | \x27orange_money\x27 | \x27bank_transfer\x27>(\x27cash\x27);/const [vanPayment, setVanPayment] = useState<\x27cash\x27 | \x27credit\x27 | \x27orange_money\x27 | \x27bank_transfer\x27>(\x27cash\x27);\n  const [vanActualCash, setVanActualCash] = useState<number>(0);/g' src/components/sales/SalesDailyRecordsModule.tsx
-
-sed -i 's/const \[triPayment, setTriPayment\] = useState<\x27cash\x27 | \x27credit\x27 | \x27orange_money\x27 | \x27bank_transfer\x27>(\x27cash\x27);/const [triPayment, setTriPayment] = useState<\x27cash\x27 | \x27credit\x27 | \x27orange_money\x27 | \x27bank_transfer\x27>(\x27cash\x27);\n  const [triActualCash, setTriActualCash] = useState<number>(0);/g' src/components/sales/SalesDailyRecordsModule.tsx
-
