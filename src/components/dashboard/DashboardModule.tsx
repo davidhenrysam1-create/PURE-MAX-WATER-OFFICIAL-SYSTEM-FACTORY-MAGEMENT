@@ -1418,7 +1418,10 @@ export const DashboardModule: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {pendingAttendance.map((rec) => (
+                  {pendingAttendance.map((rec) => {
+                    const dateObj = new Date(rec.date);
+                    const formattedDate = dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                    return (
                     <div
                       key={rec.id}
                       className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-xs"
@@ -1426,7 +1429,7 @@ export const DashboardModule: React.FC = () => {
                       <div>
                         <div className="font-bold text-slate-900 dark:text-white">{rec.userName}</div>
                         <div className="text-[11px] text-slate-500">
-                          {rec.userRole.replace('_', ' ')} • Check-in: {rec.checkInTime} ({rec.location})
+                          {rec.userRole.replace('_', ' ')} • {formattedDate} • {rec.checkInTime}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1444,7 +1447,8 @@ export const DashboardModule: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               )}
             </div>

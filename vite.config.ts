@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: process.env.GITHUB_ACTIONS || process.env.GITHUB_PAGES ? '/PURE-MAX-WATER-OFFICIAL-SYSTEM-FACTORY-MAGEMENT/' : './',
+    base: process.env.GITHUB_ACTIONS || process.env.GITHUB_PAGES ? '/PURE-MAX-WATER-OFFICIAL-SYSTEM/' : './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

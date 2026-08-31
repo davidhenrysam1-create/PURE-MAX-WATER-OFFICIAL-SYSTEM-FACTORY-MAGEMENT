@@ -130,8 +130,9 @@ E. TEAM COLLABORATION & WEBRTC CALLING (`ChatModule.tsx` & `WebRTCCallModal.tsx`
 
 F. ATTENDANCE & PAYROLL (`AttendanceModule.tsx`):
    - Geolocation-verified check-in / check-out.
-   - Manager approval workflow for unverified check-ins.
+   - Manager approval workflow for check-ins.
    - Automated daily and monthly salary calculation based on attendance points.
+   - Strict Role-Based Salary Visibility: Executive roles (`developer`, `ceo`, `manager`, `second_manager`) can view factory-wide staff payroll; all other operational roles (including `sales_manager`, `operator`, `engineer`, `staff`, `tricycle_staff`, `van_staff`) can ONLY view their own personal salary and earned compensation.
 
 G. EXPENSES & MAINTENANCE (`ExpensesModule.tsx` & `RepairsModule.tsx`):
    - Expense categorization (Generator Fuel, Vehicle Maintenance, Staff Meals, Factory Utilities).

@@ -207,7 +207,7 @@ const AppContent: React.FC = () => {
       data-glass-theme={localGlassTheme}
       className={`min-h-screen min-h-[100dvh] ${
         isDark ? `dark ${currentTheme.darkBg} text-slate-100` : `${currentTheme.lightBg} text-slate-900`
-      } font-sans antialiased transition-colors duration-300 flex flex-col w-full max-w-full overflow-x-hidden`}
+      } font-sans antialiased transition-colors duration-300 flex flex-col w-full max-w-full `}
     >
       <GlobalToast />
       <WebRTCCallModal />
@@ -216,7 +216,7 @@ const AppContent: React.FC = () => {
         onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
         isMobileMenuOpen={isMobileMenuOpen}
       />
-      <div className="flex flex-1 max-w-7xl w-full max-w-full mx-auto min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] overflow-x-hidden min-w-0">
+      <div className="flex flex-1 max-w-7xl w-full max-w-full mx-auto min-h-[calc(100vh-4rem)] min-h-[calc(100dvh-4rem)] min-w-0">
         <Sidebar
           isOpen={isMobileMenuOpen}
           onClose={() => setIsMobileMenuOpen(false)}

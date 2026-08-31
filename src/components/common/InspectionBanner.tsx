@@ -20,7 +20,7 @@ export const InspectionBanner: React.FC = () => {
   return (
     <div
       id="developer-inspection-sticky-banner"
-      className="sticky top-0 z-50 w-full bg-gradient-to-r from-amber-950 via-slate-900 to-amber-950 border-b-2 border-amber-500 shadow-2xl text-slate-100 px-4 py-2.5 backdrop-blur-md"
+      className="relative z-[60] w-full bg-gradient-to-r from-amber-950 via-slate-900 to-amber-950 border-b-2 border-amber-500 shadow-2xl text-slate-100 px-4 py-2.5 backdrop-blur-md"
     >
       <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">

@@ -50,7 +50,8 @@ export const AttendanceModule: React.FC = () => {
   const todayStr = new Date().toISOString().split('T')[0];
   const userTodayRec = attendance.find((a) => a.userId === currentUser?.id && a.date === todayStr);
 
-  const isRestrictedStaff = ['staff', 'operator', 'tricycle_staff', 'van_staff', 'engineer'].includes(activeRole);
+  const isRestrictedStaff = ['staff', 'operator', 'tricycle_staff', 'van_staff', 'engineer', 'sales_manager'].includes(activeRole);
+  const canViewAllSalaries = ['developer', 'ceo', 'manager', 'second_manager'].includes(activeRole);
 
   const isEligibleForCheckIn = [
     'operator',
@@ -370,10 +371,12 @@ export const AttendanceModule: React.FC = () => {
               <div>
                 <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                   <Banknote className="w-5 h-5 text-emerald-500" />
-                  Monthly Factory Staff Payroll (Sierra Leone Leones)
+                  {canViewAllSalaries ? 'Monthly Factory Staff Payroll (Sierra Leone Leones)' : 'My Personal Monthly Salary & Payroll (Sierra Leone Leones)'}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Calculated automatically: <code>(Approved Present Days &times; Daily Salary Rate)</code>
+                  {canViewAllSalaries
+                    ? 'Calculated automatically: (Approved Present Days × Daily Salary Rate)'
+                    : 'Your approved attendance days and calculated take-home pay based on your contract rate.'}
                 </p>
               </div>
             </div>
@@ -392,7 +395,7 @@ export const AttendanceModule: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {users
-                    .filter((u) => !isRestrictedStaff || u.id === currentUser?.id)
+                    .filter((u) => canViewAllSalaries || u.id === currentUser?.id || u.employeeId === currentUser?.employeeId)
                     .map((u) => {
                     const approvedCount = attendance.filter((a) => a.userId === u.id && a.status === 'approved').length;
                     const computedSalary = approvedCount > 0 ? approvedCount * u.dailySalaryLe : u.monthlySalaryLe;

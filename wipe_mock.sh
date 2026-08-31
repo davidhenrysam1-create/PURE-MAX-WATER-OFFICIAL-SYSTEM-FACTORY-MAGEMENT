@@ -1,0 +1,10 @@
+sed -i 's/safeLoad('\''puremax_attendance_v3'\'', INITIAL_ATTENDANCE)/safeLoad('\''puremax_attendance_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_production_v3'\'', INITIAL_PRODUCTION)/safeLoad('\''puremax_production_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_outer_buyings_v3'\'', INITIAL_OUTER_BUYINGS)/safeLoad('\''puremax_outer_buyings_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_roll_buyings_v3'\'', INITIAL_ROLL_BUYINGS)/safeLoad('\''puremax_roll_buyings_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_expenses_v3'\'', INITIAL_EXPENSES)/safeLoad('\''puremax_expenses_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_repairs_v3'\'', INITIAL_REPAIRS)/safeLoad('\''puremax_repairs_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_fuel_v3'\'', INITIAL_FUEL)/safeLoad('\''puremax_fuel_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_equipment_logs_v3'\'', INITIAL_EQUIPMENT_LOGS)/safeLoad('\''puremax_equipment_logs_v3'\'', [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad<\(ChatM.*\)>\('\''puremax_messages_v3'\'', INITIAL_CHAT_MESSAGES)/safeLoad<\1>(\2, [])/g' src/context/AppContext.tsx
+sed -i 's/safeLoad('\''puremax_announcements_v3'\'', INITIAL_ANNOUNCEMENTS)/safeLoad('\''puremax_announcements_v3'\'', [])/g' src/context/AppContext.tsx

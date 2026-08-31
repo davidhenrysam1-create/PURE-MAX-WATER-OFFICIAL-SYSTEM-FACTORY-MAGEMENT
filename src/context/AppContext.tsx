@@ -353,11 +353,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const MOCK_NAMES = ['brima sesay', 'mohamed kamara', 'alpha koroma', 'ibrahim conteh', 'alusine kamara', 'mohamed sesay'];
 
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => safeLoad('puremax_attendance_v3', INITIAL_ATTENDANCE));
-  const [sales, setSales] = useState<SalesRecord[]>(() => safeLoad('puremax_sales_v3', INITIAL_SALES));
-  const [production, setProduction] = useState<ProductionRecord[]>(() => safeLoad('puremax_production_v3', INITIAL_PRODUCTION));
-  const [outerBuyings, setOuterBuyings] = useState<OuterBuyingRecord[]>(() => safeLoad('puremax_outer_buyings_v3', INITIAL_OUTER_BUYINGS));
-  const [rollBuyings, setRollBuyings] = useState<RollBuyingRecord[]>(() => safeLoad('puremax_roll_buyings_v3', INITIAL_ROLL_BUYINGS));
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => safeLoad('puremax_attendance_v3', []));
+  const [sales, setSales] = useState<SalesRecord[]>(() => safeLoad('puremax_sales_v3', []));
+  const [production, setProduction] = useState<ProductionRecord[]>(() => safeLoad('puremax_production_v3', []));
+  const [outerBuyings, setOuterBuyings] = useState<OuterBuyingRecord[]>(() => safeLoad('puremax_outer_buyings_v3', []));
+  const [rollBuyings, setRollBuyings] = useState<RollBuyingRecord[]>(() => safeLoad('puremax_roll_buyings_v3', []));
   
   // Real packaging rolls without mock seeds
   const [packagingRolls, setPackagingRolls] = useState<PackagingRollItem[]>(() => {
@@ -416,12 +416,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.warn('Machines localStorage save warning:', err);
     }
   }, [machines]);
-  const [expenses, setExpenses] = useState<ExpenseRecord[]>(() => safeLoad('puremax_expenses_v3', INITIAL_EXPENSES));
-  const [repairs, setRepairs] = useState<MachineRepairRecord[]>(() => safeLoad('puremax_repairs_v3', INITIAL_REPAIRS));
-  const [fuel, setFuel] = useState<FuelRecord[]>(() => safeLoad('puremax_fuel_v3', INITIAL_FUEL));
-  const [equipmentLogs, setEquipmentLogs] = useState<EquipmentLogRecord[]>(() => safeLoad('puremax_equipment_logs_v3', INITIAL_EQUIPMENT_LOGS));
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>(() => safeLoad('puremax_expenses_v3', []));
+  const [repairs, setRepairs] = useState<MachineRepairRecord[]>(() => safeLoad('puremax_repairs_v3', []));
+  const [fuel, setFuel] = useState<FuelRecord[]>(() => safeLoad('puremax_fuel_v3', []));
+  const [equipmentLogs, setEquipmentLogs] = useState<EquipmentLogRecord[]>(() => safeLoad('puremax_equipment_logs_v3', []));
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const raw = safeLoad<ChatMessage[]>('puremax_messages_v3', INITIAL_CHAT_MESSAGES);
+    const raw = safeLoad<ChatMessage[]>('puremax_messages_v3', []);
     return raw.map((m) => {
       let inferredType = m.type || 'text';
       if (m.content?.startsWith('data:audio') || m.content?.startsWith('blob:') || m.content?.startsWith('voice_note_')) {
@@ -432,7 +432,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { ...m, type: inferredType };
     });
   });
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() => safeLoad('puremax_announcements_v3', INITIAL_ANNOUNCEMENTS));
+  const [announcements, setAnnouncements] = useState<Announcement[]>(() => safeLoad('puremax_announcements_v3', []));
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [toast, setToast] = useState<ToastNotification | null>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);

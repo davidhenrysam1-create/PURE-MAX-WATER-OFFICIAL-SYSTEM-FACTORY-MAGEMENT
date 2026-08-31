@@ -1,0 +1,1 @@
+sed -i 's/res.json({/let whatsappUrl = null; if(channel === "phone" \&\& targetUser.phone) { const cleanPhone = targetUser.phone.replace(\/\[^0-9\]\/g, ""); whatsappUrl = `https:\/\/wa.me\/${cleanPhone}?text=Your%20Pure%20Max%20OS%20Password%20Reset%20Code%20is%3A%20${otp}`; } res.json({ whatsappLink: whatsappUrl,/g' server.ts

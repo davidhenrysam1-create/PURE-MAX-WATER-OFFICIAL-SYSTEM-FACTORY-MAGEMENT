@@ -261,7 +261,7 @@ export const UserManagementModule: React.FC = () => {
 
   const [emailError, setEmailError] = useState<string | null>(null);
 
-  const emailRegex = /^[a-zA-Z0-9._%+-]+@(gmail\.com|puremax\.com|yahoo\.com|[a-zA-Z0-9-]+\.(com|org|net|edu|gov|sl))$/;
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@(gmail\.com|puremax\.com|puremaxwater\.com|yahoo\.com|outlook\.com|hotmail\.com)$/i;
 
   const validateOfficialEmail = (emailToCheck: string) => {
     if (!emailRegex.test(emailToCheck)) {
