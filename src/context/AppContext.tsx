@@ -3,6 +3,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
+import * as XLSX from 'xlsx';
 import { localDateKey, startOfLocalDay, msUntilNextLocalMidnight } from '../utils/dateUtils';
 import {
   User,
@@ -145,6 +146,8 @@ interface AppContextType {
   checkIn: (location?: string, notes?: string) => void;
   checkOut: (attendanceId: string) => void;
   approveAttendance: (attendanceId: string, approved: boolean) => void;
+  approveCheckOut: (attendanceId: string, approved: boolean) => void;
+  resetAttendance: (password: string) => boolean;
   overrideSalary: (userId: string, newMonthlyLe: number, reason: string) => void;
 
   // Sales
@@ -1269,6 +1272,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const unsubscribeProfile = socketService.onUserProfileUpdate((updatedUser) => {
       if (!updatedUser) return;
+
+      // Persist the incoming picture on THIS device too, so a colleague's
+      // avatar survives a refresh here rather than vanishing until the next
+      // live push.
+      if (updatedUser.avatarUrl && updatedUser.employeeId) {
+        cacheAvatar(updatedUser.employeeId, updatedUser.avatarUrl).catch(() => {});
+      }
+
       setUsers((prev) =>
         prev.map((u) =>
           u.employeeId === updatedUser.employeeId || u.id === updatedUser.id || u.id === `u-${updatedUser.id}`
@@ -1935,6 +1946,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? updatedUser : u)));
     setStaffLiveLocations((prev) => prev.map(loc => loc.userId === currentUser.id ? { ...loc, avatarUrl: updatedUser.avatarUrl } : loc));
 
+    // Push the change to every other signed-in device immediately. Without
+    // this the update only travelled via the Postgres round-trip, so other
+    // users kept showing the old picture whenever the API was unreachable.
+    socketService.emitUserProfileUpdate(updatedUser);
+
     logAudit('UPDATE_PROFILE', `Profile information updated for ${updatedUser.name} (${updatedUser.role})`, updatedUser);
     
     // Cloud SQL update
@@ -2077,6 +2093,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!currentUser) return;
     const todayStr = new Date().toISOString().split('T')[0];
     const timeIn = new Date().toTimeString().slice(0, 5);
+
+    // FIX: the old code pushed a brand-new record on every call, so a second
+    // tap (or a background re-sync) produced a duplicate row in the approval
+    // queue. One user may only ever have ONE open (un-checked-out) record per
+    // day; if they already checked out, a new session is legitimate.
+    const openToday = attendance.find(
+      (a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOutTime
+    );
+    if (openToday) {
+      showToast(
+        `You already checked in today at ${openToday.checkInTime}. Duplicate check-in blocked.`,
+        'warning',
+        'Already Checked In'
+      );
+      return;
+    }
+
     const newRec: AttendanceRecord = {
       id: `att-${Date.now()}`,
       userId: currentUser.id,
@@ -2114,8 +2147,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const checkOut = (attendanceId: string) => {
     const timeNow = new Date().toTimeString().slice(0, 5);
+    // Check-out is recorded straight away but sits in the approval queue until
+    // a Manager or Developer signs it off, exactly like check-in.
     setAttendance((prev) =>
-      prev.map((a) => (a.id === attendanceId ? { ...a, checkOutTime: timeNow } : a))
+      prev.map((a) =>
+        a.id === attendanceId
+          ? { ...a, checkOutTime: timeNow, checkOutStatus: 'pending' }
+          : a
+      )
     );
     const target = attendance.find((a) => a.id === attendanceId);
     if (target) {
@@ -2126,9 +2165,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         date: target.date,
         timeOut: timeNow,
         checkOutTime: timeNow,
+        checkOutStatus: 'pending',
+      });
+      logAudit(
+        'ATTENDANCE_CHECKOUT',
+        `${target.userName} checked out at ${timeNow} - awaiting approval`
+      );
+    }
+    showToast(
+      `Check-Out recorded at ${timeNow}. It now requires Manager/Developer approval.`,
+      'success',
+      'Checked Out (Pending Approval)'
+    );
+  };
+
+  const approveCheckOut = (attendanceId: string, approved: boolean) => {
+    const status = approved ? 'approved' : 'rejected';
+    setAttendance((prev) =>
+      prev.map((a) =>
+        a.id === attendanceId
+          ? {
+              ...a,
+              checkOutStatus: status,
+              checkOutApprovedBy: currentUser?.name || 'Manager',
+              checkOutApprovedAt: new Date().toISOString(),
+            }
+          : a
+      )
+    );
+    const target = attendance.find((a) => a.id === attendanceId);
+    if (target) {
+      logAudit(
+        'ATTENDANCE_CHECKOUT_APPROVAL',
+        `Check-out ${status} for ${target.userName} on ${target.date} by ${currentUser?.name}`
+      );
+      syncEngine.enqueue('attendance_update', {
+        id: attendanceId,
+        checkOutStatus: status,
+        checkOutTime: target.checkOutTime,
       });
     }
-    showToast(`Check-Out recorded successfully at ${timeNow}`, 'success', 'Checked Out');
+    showToast(
+      `Check-out ${status === 'approved' ? 'approved' : 'rejected'}.`,
+      status === 'approved' ? 'success' : 'warning',
+      'Check-Out Review'
+    );
   };
 
   const approveAttendance = (attendanceId: string, approved: boolean) => {
@@ -2159,6 +2240,96 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     logAudit('ATTENDANCE_APPROVAL', `${approved ? 'Approved' : 'Rejected'} attendance record ${attendanceId}`);
     showToast(`Attendance record ${approved ? 'approved' : 'rejected'}.`, 'info', 'Attendance Verified');
+  };
+
+  /**
+   * Wipe every attendance record. Manager / 2nd Manager / Developer only, and
+   * only after re-entering a privileged password.
+   *
+   * Same safety ordering as purgeRecordsByRole: the recovery archive is
+   * written to IndexedDB and downloaded as an Excel workbook BEFORE anything
+   * is deleted, so an interrupted reset leaves the records intact.
+   */
+  const resetAttendance = (password: string): boolean => {
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to reset attendance.', 'error', 'Not Authorised');
+      return false;
+    }
+    if (!['developer', 'manager', 'second_manager'].includes(actor.role)) {
+      showToast('Only a Manager or Developer may reset attendance.', 'error', 'Access Denied');
+      return false;
+    }
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Attendance was NOT reset.', 'error', 'Verification Failed');
+      logAudit('ATTENDANCE_RESET_DENIED', `${actor.name} entered a wrong reset password`);
+      return false;
+    }
+
+    const snapshot = attendance;
+    if (snapshot.length === 0) {
+      showToast('There are no attendance records to reset.', 'info', 'Nothing To Reset');
+      return true;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archive = {
+      kind: 'ATTENDANCE_RESET',
+      createdAt: new Date().toISOString(),
+      resetBy: { name: actor.name, employeeId: actor.employeeId, role: actor.role },
+      recordCount: snapshot.length,
+      records: snapshot,
+    };
+
+    // 1. durable local archive (survives refresh / crash)
+    try {
+      localStorage.setItem(`puremax_attendance_reset_${stamp}`, JSON.stringify(archive));
+    } catch {
+      /* quota - non fatal, the Excel download below is the real safety net */
+    }
+    idbStorage.saveMediaItem(`attendance-reset-${stamp}`, JSON.stringify(archive)).catch(() => {});
+
+    // 2. Excel workbook
+    try {
+      const rows = snapshot.map((r) => ({
+        'Employee ID': r.employeeId || '',
+        Name: r.userName,
+        Role: r.userRole,
+        Date: r.date,
+        'Check In': r.checkInTime,
+        'Check Out': r.checkOutTime || '',
+        Status: r.status,
+        'Check-Out Status': r.checkOutStatus || '',
+        Location: r.location || '',
+        'Approved By': r.approvedBy || '',
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Attendance Reset');
+      XLSX.writeFile(wb, `Attendance_Reset_Backup_${stamp}.xlsx`);
+    } catch (err) {
+      console.warn('Attendance reset Excel export failed:', err);
+    }
+
+    // 3. best-effort server copy, then mutate live state
+    fetch('/api/attendance-reset-archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(archive),
+    }).catch(() => {});
+
+    setAttendance([]);
+    logAudit(
+      'ATTENDANCE_RESET',
+      `${actor.name} (${actor.employeeId}) reset ALL ${snapshot.length} attendance records after password verification`,
+      actor
+    );
+    showToast(
+      `Attendance reset. ${snapshot.length} records archived to Excel and local backup.`,
+      'success',
+      'Attendance Reset Complete'
+    );
+    return true;
   };
 
   const overrideSalary = (userId: string, newMonthlyLe: number, reason: string) => {
@@ -3061,6 +3232,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         checkIn,
         checkOut,
         approveAttendance,
+        approveCheckOut,
+        resetAttendance,
         overrideSalary,
         addSalesRecord,
         addProductionRecord,

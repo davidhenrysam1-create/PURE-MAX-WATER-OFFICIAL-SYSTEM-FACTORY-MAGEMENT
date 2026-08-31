@@ -173,22 +173,34 @@ export const FleetMapModule: React.FC = () => {
   const todayStr = useMemo(() => localDateKey(), []);
 
   // Compute daily water bundle sales count per staff member
+  /**
+   * Bundles loaded today, keyed by the tricycle/van account they belong to.
+   *
+   * ONLY entries written by the Production Sales Officer (role `sales_manager`)
+   * count. A device being online is NOT enough to mark someone as selling -
+   * the officer must actually have recorded the bundle load. Anything else
+   * would show drivers as "Selling" with no paperwork behind it.
+   */
   const staffSalesTodayMap = useMemo(() => {
     const map: Record<string, number> = {};
+    const bundleCount = (s: { loadedBundles?: number; bundleQuantity?: number }) =>
+      (s.loadedBundles && s.loadedBundles > 0 ? s.loadedBundles : 0) || s.bundleQuantity || 0;
+
     sales.forEach((s) => {
-      if (s.date === todayStr) {
-        if (s.recordedById) {
-          map[s.recordedById] = (map[s.recordedById] || 0) + (s.bundleQuantity || 0);
-        }
-        if (s.customerOrDriver) {
-          const matchingUser = users.find(
-            (u) =>
-              u.name.toLowerCase() === s.customerOrDriver?.toLowerCase() ||
-              u.employeeId.toLowerCase() === s.customerOrDriver?.toLowerCase()
-          );
-          if (matchingUser && matchingUser.id !== s.recordedById) {
-            map[matchingUser.id] = (map[matchingUser.id] || 0) + (s.bundleQuantity || 0);
-          }
+      if (s.date !== todayStr) return;
+      if (s.recordedByRole !== 'sales_manager') return;
+
+      if (s.recordedById) {
+        map[s.recordedById] = (map[s.recordedById] || 0) + bundleCount(s);
+      }
+      if (s.customerOrDriver) {
+        const matchingUser = users.find(
+          (u) =>
+            u.name.toLowerCase() === s.customerOrDriver?.toLowerCase() ||
+            u.employeeId.toLowerCase() === s.customerOrDriver?.toLowerCase()
+        );
+        if (matchingUser && matchingUser.id !== s.recordedById) {
+          map[matchingUser.id] = (map[matchingUser.id] || 0) + bundleCount(s);
         }
       }
     });
@@ -240,6 +252,9 @@ export const FleetMapModule: React.FC = () => {
           lastUpdated: liveLoc?.lastUpdated ?? '',
           isLiveDeviceGps: liveLoc?.isLiveDeviceGps ?? false,
           todayBundles,
+          // "Selling" is earned, not assumed: it requires a bundle load that
+          // the Production Sales Officer recorded today.
+          isSelling: todayBundles > 0,
         };
       })
       // Only accounts with a REAL hardware GPS fix from their own device are
@@ -285,7 +300,7 @@ export const FleetMapModule: React.FC = () => {
     const statusBadge =
       staff.speedKmH > 0
         ? `<span style="background: #1e3a8a; color: #93c5fd; padding: 2px 8px; border-radius: 6px; font-weight: bold; font-size: 10px; border: 1px solid #3b82f6;">En Route (${staff.speedKmH} km/h)</span>`
-        : staff.status?.includes('Delivering') || staff.status?.includes('Selling')
+        : staff.isSelling
         ? `<span style="background: #064e3b; color: #6ee7b7; padding: 2px 8px; border-radius: 6px; font-weight: bold; font-size: 10px; border: 1px solid #10b981;">Active / Selling</span>`
         : `<span style="background: #334155; color: #cbd5e1; padding: 2px 8px; border-radius: 6px; font-weight: bold; font-size: 10px; border: 1px solid #475569;">Stationary</span>`;
 
@@ -1316,12 +1331,16 @@ export const FleetMapModule: React.FC = () => {
                   <span className={`text-xs font-bold flex items-center gap-1 mt-0.5 ${
                     selectedStaff.speedKmH > 0
                       ? 'text-blue-500'
-                      : selectedStaff.status?.includes('Delivering') || selectedStaff.status?.includes('Selling')
+                      : selectedStaff.isSelling
                       ? 'text-emerald-500'
                       : 'text-slate-400'
                   }`}>
                     <Radio className={`w-3.5 h-3.5 ${selectedStaff.hasGps ? 'animate-pulse' : ''}`} />
-                    {selectedStaff.speedKmH > 0 ? 'En Route' : 'Active / Selling'}
+                    {selectedStaff.speedKmH > 0
+                      ? 'En Route'
+                      : selectedStaff.isSelling
+                      ? 'Active / Selling'
+                      : 'Online - No Load Recorded'}
                   </span>
                 </div>
                 <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
@@ -1484,7 +1503,11 @@ export const FleetMapModule: React.FC = () => {
                         <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
                           staff.speedKmH > 0 ? 'bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400' : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
                         }`}>
-                          {staff.speedKmH > 0 ? `${staff.speedKmH} km/h` : 'Selling'}
+                          {staff.speedKmH > 0
+                            ? `${staff.speedKmH} km/h`
+                            : staff.isSelling
+                            ? 'Selling'
+                            : 'Online'}
                         </span>
                       </div>
                       <div className="text-[10px] text-slate-500 flex items-center justify-between mt-0.5">

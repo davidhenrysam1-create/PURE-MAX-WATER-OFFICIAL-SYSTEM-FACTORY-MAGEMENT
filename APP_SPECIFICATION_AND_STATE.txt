@@ -1005,3 +1005,128 @@ VERIFICATION
     Mohamed Kamara across src/ returns nothing.
   - tsc --noEmit passes with zero errors.
 ================================================================================
+
+================================================================================
+SESSION — Attendance overhaul, GPS selling rule, profile-picture sync
+================================================================================
+Owner requests (verbatim intent):
+  1. "any time a user check in ... in the staff attendance approval queue it
+      duplicates the account ... I only want if account have not been approved
+      let it be in a queue by showing the day, date only"
+  2. "I also want check out to be approved"
+  3. "in the attendance matrix I want rate to show the total days of user been
+      approved"
+  4. "I want a reset attendance option only in manager and developer and
+      attendance enter manager or developer password option to reset all
+      records in the attendance"
+  5. "in the gps section even if a tricycle or van account is online I want
+      selling to be visible only if the production sales officer have recorded
+      him (bundle load)"
+  6. "profile picture cannot be saved and cannot been seen by other users
+      (whatsapp like communication)"
+
+--------------------------------------------------------------------------------
+1. DUPLICATE CHECK-IN  (src/context/AppContext.tsx — checkIn)
+--------------------------------------------------------------------------------
+Root cause: checkIn() appended a brand-new AttendanceRecord on EVERY call with
+no lookup. A second tap, a retry, or a background re-sync produced another row
+for the same person on the same day.
+
+Fix: one user may hold at most ONE open (not-yet-checked-out) record per day.
+If an open record exists, the duplicate is refused and a warning toast names
+the original check-in time. Checking out and starting a new session later is
+still allowed — that is a genuine second shift, not a duplicate.
+
+--------------------------------------------------------------------------------
+2. CHECK-OUT NOW REQUIRES APPROVAL
+--------------------------------------------------------------------------------
+types.ts — AttendanceRecord gains:
+    checkOutStatus?: 'pending' | 'approved' | 'rejected'
+    checkOutApprovedBy?: string
+    checkOutApprovedAt?: string
+
+checkOut() records the time immediately but stamps checkOutStatus='pending'
+and writes an ATTENDANCE_CHECKOUT audit entry. It is NOT final until a
+Manager/Developer signs it off via the new approveCheckOut(id, approved).
+
+Exposed on AppContext: approveCheckOut, resetAttendance.
+
+--------------------------------------------------------------------------------
+3. APPROVAL QUEUE: DEDUPED, DAY + DATE ONLY
+--------------------------------------------------------------------------------
+AttendanceModule now builds `pendingQueue` with useMemo:
+  - collapses records to ONE row per (userId, date) via a Map
+  - merges a pending check-in and a pending check-out for the same day into a
+    single row instead of two
+  - rows show Worker | Role | DAY (weekday name) | DATE | actions
+  - actions: Approve In / Reject In, Approve Out / Reject Out
+  - only rendered for canApprove roles
+Main table also gained a check-out status badge (pending/approved/rejected).
+
+--------------------------------------------------------------------------------
+4. MATRIX: RATE SHOWS TOTAL APPROVED DAYS
+--------------------------------------------------------------------------------
+AttendanceMatrix: the third summary column was "App (1)"; it is now
+"Days Approved" and renders the approved-day COUNT with a "days approved"
+sub-label. The percentage is retained in the adjacent Rate % column and in the
+Excel export, so nothing is lost.
+
+--------------------------------------------------------------------------------
+5. RESET ATTENDANCE (Manager / Developer + password)
+--------------------------------------------------------------------------------
+New button "Reset Attendance" in the module header, shown only to
+developer / manager / second_manager. Opens a Portal-rendered alertdialog:
+  - states the exact record count
+  - requires the Manager/Developer password (verifyPrivilegedPassword)
+  - disabled until a password is typed
+AppContext.resetAttendance(password) returns boolean:
+  - rejects non-privileged roles and wrong passwords (wrong attempt is audited
+    as ATTENDANCE_RESET_DENIED)
+  - archives FIRST: localStorage snapshot + IndexedDB copy + Excel workbook
+    (SheetJS, Attendance_Reset_Backup_<stamp>.xlsx) + best-effort POST to
+    /api/attendance-reset-archive
+  - only then clears attendance, audits ATTENDANCE_RESET and toasts
+Same archive-before-mutate ordering as the purge panel, so an interrupted
+reset leaves the records intact.
+
+--------------------------------------------------------------------------------
+6. GPS: "SELLING" REQUIRES A RECORDED BUNDLE LOAD
+--------------------------------------------------------------------------------
+FleetMapModule.staffSalesTodayMap now ignores any sale whose recordedByRole is
+not 'sales_manager' (Production Sales Officer), and counts loadedBundles
+(falling back to bundleQuantity). Each plotted staff member gains:
+    isSelling = todayBundles > 0
+All three "Selling" surfaces (Leaflet/Google popup badge, selected-staff status
+text, sidebar list) now branch on isSelling. An online driver with no recorded
+load reads "Online" / "Online - No Load Recorded" instead of "Selling".
+
+--------------------------------------------------------------------------------
+7. PROFILE PICTURE — SAVE + CROSS-USER VISIBILITY
+--------------------------------------------------------------------------------
+Diagnosis: the server already emitted 'user:profile_updated' after a successful
+Postgres write, and the socket listener and AppContext handler were both wired
+correctly. The gap was that the ONLY path was that DB round-trip: when the API
+was unreachable (GitHub Pages, or a deploy with no backend) the fetch failed
+silently and no other device ever learned about the new picture.
+
+Fix:
+  - socketService: new emitUserProfileUpdate() emitting 'profile:broadcast'
+  - server.ts: new socket.on('profile:broadcast') relaying to
+    io.emit + io.to('factory-global').emit('user:profile_updated')
+  - AppContext.updateUserProfile() now calls emitUserProfileUpdate() on every
+    save, so the change is pushed live even when the DB write fails
+  - AppContext's onUserProfileUpdate handler now writes the incoming avatar to
+    the local IndexedDB cache, so a colleague's picture persists on this device
+    across refreshes instead of vanishing until the next live push
+
+Local save/reload was already handled by the avatarStore (IndexedDB cache +
+localStorage mirror + stripAvatars quota guard + rehydrateAvatars on mount);
+that path was verified and left intact.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit      -> exit 0, zero errors
+  npm run build     -> success (2335 modules, dist/index.html + assets,
+                       dist/server.cjs)
+================================================================================

@@ -837,6 +837,15 @@ class SocketService {
     };
   }
 
+  /**
+   * Broadcast a profile change (name, phone, avatar...) to every other
+   * connected device. This is independent of the Postgres write, so picture
+   * updates still reach other users when the database is unavailable.
+   */
+  public emitUserProfileUpdate(userData: any) {
+    this.socket?.emit('profile:broadcast', userData);
+  }
+
   public emitSettingsUpdate(settings: any) {
     this.socket?.emit('settings:broadcast', settings);
   }

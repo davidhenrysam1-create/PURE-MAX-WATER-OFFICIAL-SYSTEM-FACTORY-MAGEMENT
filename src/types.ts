@@ -56,6 +56,11 @@ export interface AttendanceRecord {
   approvedAt?: string;
   durationHours?: number;
   isOfflinePending?: boolean;
+  // Check-out is a separate approval step. A check-out is recorded
+  // immediately but stays 'pending' until a Manager/Developer approves it.
+  checkOutStatus?: 'pending' | 'approved' | 'rejected';
+  checkOutApprovedBy?: string;
+  checkOutApprovedAt?: string;
 }
 
 export type SalesCategory = 'Factory Sales' | 'Van Sales' | 'Tricycle Sales' | 'Wholesale Orders' | 'Damaged Bundles';

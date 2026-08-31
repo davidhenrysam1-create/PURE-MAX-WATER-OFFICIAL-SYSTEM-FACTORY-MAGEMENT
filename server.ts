@@ -200,6 +200,12 @@ io.on('connection', (socket) => {
   });
 
   // 7. Global Theme & System Settings Broadcast
+  socket.on('profile:broadcast', (userData: any) => {
+    if (!userData) return;
+    io.emit('user:profile_updated', userData);
+    io.to('factory-global').emit('user:profile_updated', userData);
+  });
+
   socket.on('settings:broadcast', (settings: any) => {
     io.emit('settings:updated', settings);
     io.to('factory-global').emit('settings:updated', settings);

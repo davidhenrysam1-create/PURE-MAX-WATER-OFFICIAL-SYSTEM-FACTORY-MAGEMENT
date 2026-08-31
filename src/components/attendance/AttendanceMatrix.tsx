@@ -56,7 +56,7 @@ export const AttendanceMatrix: React.FC<AttendanceMatrixProps> = ({ attendance, 
 
   const handleExportExcel = () => {
     const wsData = [
-      ['Employee Name', 'Department/Role', ...daysArray.map(d => d.split('-')[2]), 'Total Approved (1s)', 'Total Rejected (0s)', 'Attendance Rate (%)'],
+      ['Employee Name', 'Department/Role', ...daysArray.map(d => d.split('-')[2]), 'Total Days Approved (1s)', 'Total Rejected (0s)', 'Attendance Rate (%)'],
       ...matrixData.map(row => [
         row.user.name,
         row.user.role ? row.user.role.replace('_', ' ').toUpperCase() : '',
@@ -78,7 +78,7 @@ export const AttendanceMatrix: React.FC<AttendanceMatrixProps> = ({ attendance, 
       <div className="flex justify-between items-center bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
         <div>
           <h3 className="font-bold text-sm text-slate-900 dark:text-white">Monthly Attendance Matrix</h3>
-          <p className="text-xs text-slate-500">1 = Approved, 0 = Rejected, P = Pending Check-in Review</p>
+          <p className="text-xs text-slate-500">1 = Approved, 0 = Rejected, P = Pending Check-in Review &middot; <strong>Days Approved</strong> = total approved days this month</p>
         </div>
         <button
           onClick={handleExportExcel}
@@ -98,7 +98,7 @@ export const AttendanceMatrix: React.FC<AttendanceMatrixProps> = ({ attendance, 
               {daysArray.map((_, i) => (
                 <th key={i} className="p-2 text-center border-r border-slate-200 dark:border-slate-800 w-8">{i + 1}</th>
               ))}
-              <th className="p-3 text-center border-r border-slate-200 dark:border-slate-800">App (1)</th>
+              <th className="p-3 text-center border-r border-slate-200 dark:border-slate-800" title="Total approved days in this month">Days Approved</th>
               <th className="p-3 text-center border-r border-slate-200 dark:border-slate-800">Rej (0)</th>
               <th className="p-3 text-center">Rate %</th>
             </tr>
@@ -118,7 +118,10 @@ export const AttendanceMatrix: React.FC<AttendanceMatrixProps> = ({ attendance, 
                     {!status && <span className="text-slate-300 dark:text-slate-700">-</span>}
                   </td>
                 ))}
-                <td className="p-3 text-center font-bold text-emerald-600 dark:text-emerald-400 border-r border-slate-200 dark:border-slate-800">{row.approvedCount}</td>
+                <td className="p-3 text-center border-r border-slate-200 dark:border-slate-800">
+                  <span className="font-extrabold text-emerald-600 dark:text-emerald-400">{row.approvedCount}</span>
+                  <span className="block text-[8px] text-slate-400 font-normal">days approved</span>
+                </td>
                 <td className="p-3 text-center font-bold text-rose-500 border-r border-slate-200 dark:border-slate-800">{row.rejectedCount}</td>
                 <td className="p-3 text-center font-bold text-blue-500">{row.rate}%</td>
               </tr>
