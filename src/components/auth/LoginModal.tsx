@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { usePwaInstall } from '../../utils/usePwaInstall';
 import { compressImage } from '../../utils/imageCompressor';
 import {
   Droplets,
@@ -20,6 +21,9 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Download,
+  Share2,
+  X,
 } from 'lucide-react';
 
 export const LoginModal: React.FC = () => {
@@ -40,6 +44,10 @@ export const LoginModal: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState(false);
+  // Install-as-app on the login screen. Hidden automatically once the app has
+  // been installed (or the user has dismissed it) on this device.
+  const pwa = usePwaInstall();
+  const [showIosInstallHelp, setShowIosInstallHelp] = useState(false);
 
   // First Login Password & Profile Setup State
   const [wantToUpdatePassword, setWantToUpdatePassword] = useState<boolean | null>(null);
@@ -575,6 +583,25 @@ export const LoginModal: React.FC = () => {
                 <span>Sign In to Pure Max Platform</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
+
+              {/* Download / Install the app instead of using a browser tab.
+                  Disappears permanently once installed or dismissed. */}
+              {pwa.canInstall && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (pwa.needsManualInstructions) {
+                      setShowIosInstallHelp(true);
+                    } else {
+                      void pwa.install();
+                    }
+                  }}
+                  className="w-full py-3 mt-3 min-h-[44px] bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold rounded-xl border border-indigo-500/40 transition flex items-center justify-center gap-2 text-sm cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-indigo-400" />
+                  <span>Download App</span>
+                </button>
+              )}
             </form>
           </div>
         </div>
@@ -766,6 +793,73 @@ export const LoginModal: React.FC = () => {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* iOS cannot install programmatically — show the manual path.
+          Safari does not support beforeinstallprompt. */}
+      {showIosInstallHelp && (
+        <div
+          className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+          onClick={() => setShowIosInstallHelp(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    Install Pure Max
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Runs full-screen, like a native app
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowIosInstallHelp(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <ol className="space-y-2.5 text-xs text-slate-700 dark:text-slate-300">
+              <li className="flex gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-black flex items-center justify-center shrink-0">1</span>
+                <span>Tap the <strong>Share</strong> button <Share2 className="inline w-3.5 h-3.5 -mt-0.5" /> in Safari's toolbar.</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-black flex items-center justify-center shrink-0">2</span>
+                <span>Scroll down and choose <strong>Add to Home Screen</strong>.</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-black flex items-center justify-center shrink-0">3</span>
+                <span>Tap <strong>Add</strong>. The Pure Max icon appears on your home screen and opens without the Safari address bar.</span>
+              </li>
+            </ol>
+
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-[11px] text-amber-900 dark:text-amber-200">
+              On iPhone/iPad this must be done in <strong>Safari</strong> — Chrome and other browsers on iOS cannot install apps to the home screen.
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowIosInstallHelp(false);
+                pwa.dismiss();
+              }}
+              className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition cursor-pointer"
+            >
+              Done — don't show this again
+            </button>
           </div>
         </div>
       )}

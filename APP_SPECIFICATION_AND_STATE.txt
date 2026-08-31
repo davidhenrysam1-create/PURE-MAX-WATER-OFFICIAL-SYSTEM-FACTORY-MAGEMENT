@@ -1428,3 +1428,74 @@ VERIFICATION
   tsc --noEmit  -> exit 0, zero errors
   npm run build -> success
 ================================================================================
+
+================================================================================
+SESSION — Download App button on login + Reset Repairs & Fuel
+================================================================================
+Owner requests:
+  1. "I ALSO WANT A DOWNLOAD APP OPTION IN LOGIN SCREE (DOWNLOAD ACTUAL APP
+      INSTED OF WEB SHORTCURT) AFTER APP HAVE DAWNLOAD, DAWNLOAD BUTTON
+      DISSEPER"
+  2. "I WANT A BUTTON TO ALSO RESET REPAIR AND FUEL (MANAGER DASH BOARD)
+      MANGER RECORDS"
+
+--------------------------------------------------------------------------------
+1. DOWNLOAD APP BUTTON (Login screen)
+--------------------------------------------------------------------------------
+New hook: src/utils/usePwaInstall.ts
+
+IMPORTANT - WHAT "ACTUAL APP" MEANS HERE, READ THIS BEFORE EXPECTING AN APK
+  A native Android APK / iOS IPA cannot be produced from this repository or from
+  Google AI Studio: that needs a native toolchain (Android SDK + Gradle, or
+  Xcode) and a signing keystore. Nothing in this sandbox can compile one, and
+  AI Studio serves a hosted web app.
+
+  What IS delivered is a genuine installed application, not a browser bookmark:
+  the app already ships public/manifest.json with "display": "standalone", a
+  registered service worker (public/sw.js) and 192/512 icons. Installing it
+  produces a real home-screen/launcher icon that launches WITHOUT browser
+  chrome, with offline capability - i.e. a PWA, which is what a hosted web app
+  can legitimately offer.
+
+Behaviour
+  - "Download App" button renders directly under the Sign In button, visible
+    only when installation is actually possible on this device.
+  - Chrome/Edge/Android: intercepts the native `beforeinstallprompt` event and
+    replays it, so the OS install dialog appears.
+  - iOS/iPadOS: Safari exposes no install event, so a step-by-step modal
+    explains Share -> Add to Home Screen (Safari only; Chrome on iOS cannot).
+  - The button DISAPPEARS permanently once installed (`appinstalled`, or
+    display-mode change) or once dismissed, persisted in localStorage under
+    `puremax_app_install_dismissed_v1`.
+
+To ship a true APK later, the route is Bubblewrap/Capacitor wrapping the same
+manifest, or a Play Store Trusted Web Activity.
+
+--------------------------------------------------------------------------------
+2. RESET REPAIRS & FUEL (Manager / Developer)
+--------------------------------------------------------------------------------
+New AppContext.resetRepairsAndFuel(password):
+  - Gate: canPurgeRecords(role) + verifyPrivilegedPassword(). A wrong password
+    is audited as REPAIRS_FUEL_RESET_DENIED and deletes nothing.
+  - Archive FIRST: localStorage snapshot + IndexedDB copy + a two-sheet Excel
+    workbook (Repairs_Fuel_Reset_Backup_<stamp>.xlsx) + POST to
+    /api/repairs-fuel-reset-archive (audit row only).
+  - Then POSTs /api/repairs-fuel-reset, which really deletes from the `repairs`
+    and `fuel_logs` tables. Without this the wipe would revert on the next sync,
+    exactly as reported earlier for production.
+  - Then clears `repairs` and `fuel` in state, audits and toasts.
+
+UI: "Reset Repairs & Fuel" button in the dashboard reset cluster (Manager /
+2nd Manager / Developer only), opening a password modal that shows live counts
+of what will be destroyed.
+
+New server endpoints:
+  POST /api/repairs-fuel-reset          (deletes repairs + fuel_logs)
+  POST /api/repairs-fuel-reset-archive  (audit record only, deletes nothing)
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0, zero errors
+  npm run build -> success
+================================================================================

@@ -75,6 +75,7 @@ export const DashboardModule: React.FC = () => {
     resetDailyCounters,
     resetMaterialBuyings,
     resetProductionRecords,
+    resetRepairsAndFuel,
     packagingRolls,
   } = useApp();
 
@@ -87,6 +88,8 @@ export const DashboardModule: React.FC = () => {
   // Full production reset (batches + roll inventory + outer film)
   const [showProductionResetConfirm, setShowProductionResetConfirm] = useState(false);
   const [productionResetPassword, setProductionResetPassword] = useState('');
+  const [showRepairsFuelResetConfirm, setShowRepairsFuelResetConfirm] = useState(false);
+  const [repairsFuelResetPassword, setRepairsFuelResetPassword] = useState('');
 
   // Daily Developer Branding State
   const loginFileRef = useRef<HTMLInputElement>(null);
@@ -1288,6 +1291,19 @@ export const DashboardModule: React.FC = () => {
                       <span>Reset Production &amp; Roll Records</span>
                     </button>
                   )}
+                  {canResetDaily && (
+                    <button
+                      onClick={() => {
+                        setRepairsFuelResetPassword('');
+                        setShowRepairsFuelResetConfirm(true);
+                      }}
+                      className="px-3 py-1.5 bg-rose-600/20 border border-rose-500/40 text-rose-300 hover:bg-rose-600/40 font-bold rounded-xl text-xs flex items-center gap-1.5 transition cursor-pointer"
+                      title="Wipe all repairs and fuel records (password required)"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Reset Repairs &amp; Fuel</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1931,6 +1947,77 @@ export const DashboardModule: React.FC = () => {
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
               >
                 Reset Production &amp; Roll Records
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Repairs & Fuel reset - Manager / Developer password gate */}
+      {showRepairsFuelResetConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 shadow-2xl overflow-hidden">
+            <div className="bg-rose-50 dark:bg-rose-950/30 p-5 border-b border-rose-100 dark:border-rose-900">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-900 text-rose-600 dark:text-rose-300 flex items-center justify-center shrink-0">
+                  <RotateCcw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-rose-900 dark:text-rose-200">
+                    Reset Repairs &amp; Fuel Records?
+                  </h3>
+                  <p className="text-[11px] text-rose-800/80 dark:text-rose-300/80">
+                    Enter your Manager / Developer password to confirm
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="p-6">
+              <div className="mb-4 p-3 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/50 rounded-xl text-xs text-rose-700 dark:text-rose-300 font-medium">
+                This permanently clears:
+                <ul className="list-disc pl-4 mt-1.5 space-y-0.5">
+                  <li>{repairs.length} machine repair record(s)</li>
+                  <li>{fuel.length} fuel log(s)</li>
+                </ul>
+                <div className="mt-2">
+                  A backup workbook is downloaded before anything is deleted.
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-800 dark:text-slate-200">
+                  Manager / Developer Password <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={repairsFuelResetPassword}
+                  onChange={(e) => setRepairsFuelResetPassword(e.target.value)}
+                  placeholder="Enter password..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setShowRepairsFuelResetConfirm(false);
+                  setRepairsFuelResetPassword('');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={repairsFuelResetPassword.length < 4}
+                onClick={() => {
+                  const success = resetRepairsAndFuel(repairsFuelResetPassword);
+                  if (success) {
+                    setShowRepairsFuelResetConfirm(false);
+                    setRepairsFuelResetPassword('');
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
+              >
+                Reset Repairs &amp; Fuel
               </button>
             </div>
           </div>

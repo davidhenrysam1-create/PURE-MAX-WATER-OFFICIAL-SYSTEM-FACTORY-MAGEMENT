@@ -150,6 +150,7 @@ interface AppContextType {
   resetAttendance: (password: string) => boolean;
   resetMaterialBuyings: (password: string) => boolean;
   resetProductionRecords: (password: string) => boolean;
+  resetRepairsAndFuel: (password: string) => boolean;
   overrideSalary: (userId: string, newMonthlyLe: number, reason: string) => void;
 
   // Sales
@@ -2622,6 +2623,92 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
     return true;
   };
+
+  /**
+   * Wipe every Repairs & Fuel record (Manager / Developer, password gated).
+   * Same archive-first ordering and server-delete pattern as the production
+   * reset so the wipe survives a reconnect.
+   */
+  const resetRepairsAndFuel = (password: string): boolean => {
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to reset repairs & fuel.', 'error', 'Not Authorised');
+      return false;
+    }
+    if (!canPurgeRecords(actor.role as UserRole)) {
+      showToast('Only a Manager or Developer may reset repairs & fuel.', 'error', 'Access Denied');
+      return false;
+    }
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Repairs & fuel were NOT reset.', 'error', 'Verification Failed');
+      logAudit('REPAIRS_FUEL_RESET_DENIED', `${actor.name} entered a wrong reset password`);
+      return false;
+    }
+
+    const counts = { repairs: repairs.length, fuel: fuel.length };
+    if (counts.repairs === 0 && counts.fuel === 0) {
+      showToast('There are no repairs or fuel records to reset.', 'info', 'Nothing To Reset');
+      return true;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archive = {
+      kind: 'REPAIRS_FUEL_RESET',
+      createdAt: new Date().toISOString(),
+      resetBy: { name: actor.name, employeeId: actor.employeeId, role: actor.role },
+      counts,
+      repairs,
+      fuel,
+    };
+
+    // 1. durable local archive
+    try {
+      localStorage.setItem(`puremax_repairs_fuel_reset_${stamp}`, JSON.stringify(archive));
+    } catch {
+      /* quota - the Excel download below is the real safety net */
+    }
+    idbStorage.saveMediaItem(`repairs-fuel-reset-${stamp}`, JSON.stringify(archive)).catch(() => {});
+
+    // 2. Excel workbook
+    try {
+      const wb = XLSX.utils.book_new();
+      const add = (name: string, rows: any[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ '(no records)': '' }]);
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+      };
+      add('Repairs', repairs);
+      add('Fuel', fuel);
+      XLSX.writeFile(wb, `Repairs_Fuel_Reset_Backup_${stamp}.xlsx`);
+    } catch (err) {
+      console.warn('Repairs & fuel reset Excel export failed:', err);
+    }
+
+    // 3. backup audit record (deletes nothing)
+    fetch('/api/repairs-fuel-reset-archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(archive),
+    }).catch(() => {});
+
+    // 3b. THE ACTUAL SERVER DELETE - otherwise rows return on the next sync.
+    fetch('/api/repairs-fuel-reset', { method: 'POST' }).catch(() => {});
+
+    // 4. clear live state
+    setRepairs([]);
+    setFuel([]);
+
+    logAudit(
+      'REPAIRS_FUEL_RESET',
+      `${actor.name} (${actor.employeeId}) reset ALL repairs (${counts.repairs}) and fuel (${counts.fuel}) records after password verification`,
+      actor
+    );
+    showToast(
+      `Repairs & Fuel reset. ${counts.repairs} repair and ${counts.fuel} fuel records cleared.`,
+      'success',
+      'Repairs & Fuel Reset Complete'
+    );
+    return true;
+  };
   const resetAttendance = (password: string): boolean => {
     const actor = currentUser;
     if (!actor) {
@@ -3608,6 +3695,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         resetAttendance,
         resetMaterialBuyings,
         resetProductionRecords,
+        resetRepairsAndFuel,
         overrideSalary,
         addSalesRecord,
         addProductionRecord,

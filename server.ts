@@ -812,7 +812,33 @@ app.post('/api/production-reset', async (req: Request, res: Response) => {
   }
 });
 
+/** Full Repairs & Fuel reset, server side. */
+app.post('/api/repairs-fuel-reset', async (req: Request, res: Response) => {
+  try {
+    const out: Record<string, number> = {};
+    const wipe = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        out[label] = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+      } catch (err) {
+        console.warn(`repairs-fuel-reset: ${label} failed`, err);
+        out[label] = 0;
+      }
+    };
+    await wipe('repairs', () => db.delete(repairs).returning());
+    await wipe('fuel', () => db.delete(fuelLogs).returning());
+
+    broadcastDbChange('repairs_fuel_reset', 'delete', out);
+    res.json({ success: true, deleted: out });
+  } catch (err) {
+    console.error('Error resetting repairs & fuel:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post('/api/attendance-reset-archive', (req, res) => recordResetArchive('ATTENDANCE', req, res));
+app.post('/api/production-reset-archive', (req, res) => recordResetArchive('PRODUCTION', req, res));
+app.post('/api/repairs-fuel-reset-archive', (req, res) => recordResetArchive('REPAIRS_FUEL', req, res));
 app.post('/api/production-reset-archive', (req, res) => recordResetArchive('PRODUCTION', req, res));
 
 app.post('/api/attendance-reset', async (req, res) => {
