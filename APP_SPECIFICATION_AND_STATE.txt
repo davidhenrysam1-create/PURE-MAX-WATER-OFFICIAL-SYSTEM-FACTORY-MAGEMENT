@@ -1499,3 +1499,80 @@ VERIFICATION
   tsc --noEmit  -> exit 0, zero errors
   npm run build -> success
 ================================================================================
+
+================================================================================
+SESSION — Every reset reverted when back online (ALL reset options)
+================================================================================
+Owner report:
+  "EVEN ATTANDANCE RESET ONLY WORKS OFFLINE AND LET ME SAY ALL THE RESET OPTION
+   ONLY WORK OFFLINE WHEN ONLINE ALL RECORDS WHICH HAVE BEEN DELETED WILL
+   RESTORE"
+
+--------------------------------------------------------------------------------
+WHY THE EARLIER FIX WAS NOT ENOUGH
+--------------------------------------------------------------------------------
+The previous session added two things:
+  1. server-side delete endpoints, and
+  2. tombstones - but ONLY for purgeRecordsByRole(), keyed by EMPLOYEE identity.
+
+Gap: none of the RESET functions wrote tombstones. A reset empties a whole
+collection for EVERYONE, which an employee-keyed tombstone cannot express. So
+whenever the backend was unreachable (static deploy, API 404, offline server)
+the reset cleared local state, the next refreshCloudData() re-downloaded the
+rows, and everything came back. Exactly the reported symptom.
+
+resetMaterialBuyings() was worse: it had NO server call at all.
+
+--------------------------------------------------------------------------------
+FIX — COLLECTION-LEVEL TOMBSTONES
+--------------------------------------------------------------------------------
+New localStorage key `puremax_reset_tombstones_v1`:
+    { "<collection>": "<ISO timestamp it was emptied>" }
+
+Helpers added in AppContext:
+  tombstoneCollections(names)          mark collections emptied now
+  isCollectionTombstoned(name, date)   true when a row predates the reset
+  dropResurrected(rows, collection, identitiesOf, dateOf)
+      single filter applying BOTH layers - collection reset AND employee purge
+
+Every reset now stamps its collections before clearing state:
+  resetAttendance        -> ['attendance']
+  resetProductionRecords -> ['production','outerBuyings','rollBuyings',
+                             'packagingRolls']
+  resetRepairsAndFuel    -> ['repairs','fuel']
+  resetMaterialBuyings   -> ['outerBuyings','rollBuyings']  + server call added
+
+All ten server merges in refreshCloudData() now route through dropResurrected():
+  attendance, sales, production, outerBuyings, rollBuyings, packagingRolls,
+  expenses, repairs, fuel, equipmentLogs
+
+Ordering rule preserved: rows dated AFTER a reset are kept, so resetting a
+collection does not lock staff out of recording new work.
+
+--------------------------------------------------------------------------------
+NEW SERVER ENDPOINT
+--------------------------------------------------------------------------------
+POST /api/material-reset    deletes outer_buyings + roll_buyings
+(Previously resetMaterialBuyings had no backend call whatsoever.)
+
+Existing delete endpoints, unchanged:
+  /api/attendance-reset, /api/production-reset, /api/repairs-fuel-reset,
+  /api/purge-by-role
+Audit-only endpoints (never mutate): /api/*-reset-archive
+
+--------------------------------------------------------------------------------
+RESULT
+--------------------------------------------------------------------------------
+A reset now holds in three independent ways, so it survives whichever layer is
+actually available:
+  1. server delete  - authoritative when the backend is reachable
+  2. collection tombstone - blocks resurrection when it is not
+  3. employee tombstone - blocks resurrection after a role purge
+Plus the archive (IndexedDB + Excel) is always written BEFORE deletion.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0, zero errors
+  npm run build -> success
+================================================================================

@@ -812,6 +812,30 @@ app.post('/api/production-reset', async (req: Request, res: Response) => {
   }
 });
 
+/** Outer + roll buying reset. Previously had no server call at all. */
+app.post('/api/material-reset', async (req: Request, res: Response) => {
+  try {
+    const out: Record<string, number> = {};
+    const wipe = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        out[label] = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+      } catch (err) {
+        console.warn(`material-reset: ${label} failed`, err);
+        out[label] = 0;
+      }
+    };
+    await wipe('outerBuyings', () => db.delete(outerBuyings).returning());
+    await wipe('rollBuyings', () => db.delete(rollBuyings).returning());
+
+    broadcastDbChange('material_reset', 'delete', out);
+    res.json({ success: true, deleted: out });
+  } catch (err) {
+    console.error('Error resetting material logs:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 /** Full Repairs & Fuel reset, server side. */
 app.post('/api/repairs-fuel-reset', async (req: Request, res: Response) => {
   try {

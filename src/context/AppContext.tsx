@@ -314,6 +314,66 @@ const tombstoneEmployees = (identities: string[]) => {
   writeTombstones(t);
 };
 
+/**
+ * Collection-level tombstones.
+ *
+ * A RESET clears a whole collection for everyone, so an employee tombstone
+ * cannot express it. This records "collection X was emptied at time T"; any
+ * incoming server row for that collection dated at or before T is dropped.
+ *
+ * This is what makes a reset survive a reconnect when the backend is absent or
+ * the delete call fails - without it the rows were simply re-downloaded.
+ */
+const COLLECTION_TOMBSTONE_KEY = 'puremax_reset_tombstones_v1';
+
+type CollectionTombstones = Record<string, string>; // collection -> ISO timestamp
+
+const readCollectionTombstones = (): CollectionTombstones => {
+  try {
+    const raw = localStorage.getItem(COLLECTION_TOMBSTONE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+/** Mark these collections as emptied right now. */
+const tombstoneCollections = (names: string[]) => {
+  if (!names.length) return;
+  const now = new Date().toISOString();
+  const t = readCollectionTombstones();
+  names.forEach((n) => {
+    t[n] = now;
+  });
+  try {
+    localStorage.setItem(COLLECTION_TOMBSTONE_KEY, JSON.stringify(t));
+  } catch {
+    /* non-fatal */
+  }
+};
+
+/** True when a row predates the last full reset of its collection. */
+const isCollectionTombstoned = (collection: string, recordDate?: string | null): boolean => {
+  const cut = readCollectionTombstones()[collection];
+  if (!cut) return false;
+  if (!recordDate) return true;
+  return String(recordDate) <= cut.slice(0, 10);
+};
+
+/** Drop server rows that predate either their owner's purge or a collection reset. */
+const dropResurrected = <T extends Record<string, any>>(
+  rows: T[],
+  collection: string,
+  identityOf: (r: T) => Array<string | undefined | null>,
+  dateOf: (r: T) => string | undefined | null
+): T[] =>
+  rows.filter((r) => {
+    const d = dateOf(r);
+    if (isCollectionTombstoned(collection, d)) return false;
+    return !identityOf(r).some((id) => isTombstoned(id, d));
+  });
+
 /** True when a record authored by `employeeId` predates their purge. */
 const isTombstoned = (identity?: string | null, recordDate?: string | null): boolean => {
   if (!identity) return false;
@@ -1233,8 +1293,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             notes: a.notes || '',
             approvedBy: a.verifiedBy || a.verified_by || a.approvedBy,
           }));
-          const surviving = filterTombstoned(
+          const surviving = dropResurrected(
             mapped,
+            'attendance',
             (r) => [r.employeeId, r.userName],
             (r) => r.date
           );
@@ -1249,7 +1310,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (salesRes.status === 'fulfilled' && salesRes.value.ok) {
         const pgSales = await salesRes.value.json();
         if (Array.isArray(pgSales)) {
-          const surviving = filterTombstoned(pgSales, (r) => [r.staffName], (r) => r.date);
+          const surviving = dropResurrected(pgSales, 'sales', (r) => [r.staffName], (r) => r.date);
           setSales((prevLocal) => {
             const map = new Map();
             surviving.forEach((s: any) => map.set(s.id, s));
@@ -1262,8 +1323,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (prodRes.status === 'fulfilled' && prodRes.value.ok) {
         const pgProd = await prodRes.value.json();
         if (Array.isArray(pgProd)) {
-          const surviving = filterTombstoned(
+          const surviving = dropResurrected(
             pgProd,
+            'production',
             (r: any) => [r.operatorName, r.operatorId, r.engineerId],
             (r: any) => r.date
           );
@@ -1279,7 +1341,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (outBuyRes.status === 'fulfilled' && outBuyRes.value.ok) {
         const pgOutBuy = await outBuyRes.value.json();
         if (Array.isArray(pgOutBuy)) {
-          const surviving = filterTombstoned(pgOutBuy, (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
+          const surviving = dropResurrected(pgOutBuy, 'outerBuyings', (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
           setOuterBuyings((prevLocal) => {
             const map = new Map();
             surviving.forEach((o: any) => map.set(o.id, o));
@@ -1292,7 +1354,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (rollBuyRes.status === 'fulfilled' && rollBuyRes.value.ok) {
         const pgRollBuy = await rollBuyRes.value.json();
         if (Array.isArray(pgRollBuy)) {
-          const surviving = filterTombstoned(pgRollBuy, (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
+          const surviving = dropResurrected(pgRollBuy, 'rollBuyings', (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
           setRollBuyings((prevLocal) => {
             const map = new Map();
             surviving.forEach((r: any) => map.set(r.id, r));
@@ -1305,9 +1367,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (pkgRollsRes.status === 'fulfilled' && pkgRollsRes.value.ok) {
         const pgPkgRolls = await pkgRollsRes.value.json();
         if (Array.isArray(pgPkgRolls) && pgPkgRolls.length > 0) {
+          const surviving = dropResurrected(
+            pgPkgRolls,
+            'packagingRolls',
+            (r: any) => [r.operatorId, r.operatorName],
+            (r: any) => r.purchaseDate || r.loadedAt
+          );
           setPackagingRolls((prevLocal) => {
             const map = new Map();
-            pgPkgRolls.forEach((r: any) => map.set(r.rollCode || r.id, r));
+            surviving.forEach((r: any) => map.set(r.rollCode || r.id, r));
             prevLocal.forEach((r: any) => map.set(r.rollCode || r.id, r));
             return Array.from(map.values());
           });
@@ -1317,7 +1385,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (expRes.status === 'fulfilled' && expRes.value.ok) {
         const pgExp = await expRes.value.json();
         if (Array.isArray(pgExp)) {
-          const surviving = filterTombstoned(pgExp, (r: any) => [r.recordedBy, r.recordedById], (r: any) => r.date);
+          const surviving = dropResurrected(pgExp, 'expenses', (r: any) => [r.recordedBy, r.recordedById], (r: any) => r.date);
           setExpenses((prevLocal) => {
             const map = new Map();
             surviving.forEach((e: any) => map.set(e.id, e));
@@ -1330,7 +1398,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (repRes.status === 'fulfilled' && repRes.value.ok) {
         const pgRep = await repRes.value.json();
         if (Array.isArray(pgRep)) {
-          const surviving = filterTombstoned(pgRep, (r: any) => [r.reportedBy, r.technicianName, r.engineerId], (r: any) => r.dateReported || r.date);
+          const surviving = dropResurrected(pgRep, 'repairs', (r: any) => [r.reportedBy, r.technicianName, r.engineerId], (r: any) => r.dateReported || r.date);
           setRepairs((prevLocal) => {
             const map = new Map();
             surviving.forEach((r: any) => map.set(r.id, r));
@@ -1343,7 +1411,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (fuelRes.status === 'fulfilled' && fuelRes.value.ok) {
         const pgFuel = await fuelRes.value.json();
         if (Array.isArray(pgFuel)) {
-          const surviving = filterTombstoned(pgFuel, (r: any) => [r.driverName, r.engineerId], (r: any) => r.date);
+          const surviving = dropResurrected(pgFuel, 'fuel', (r: any) => [r.driverName, r.engineerId], (r: any) => r.date);
           setFuel((prevLocal) => {
             const map = new Map();
             surviving.forEach((f: any) => map.set(f.id, f));
@@ -1356,7 +1424,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (eqRes.status === 'fulfilled' && eqRes.value.ok) {
         const pgEq = await eqRes.value.json();
         if (Array.isArray(pgEq)) {
-          const survivingEq = filterTombstoned(pgEq, (r: any) => [r.operatorId, r.operatorName], (r: any) => r.date);
+          const survivingEq = dropResurrected(pgEq, 'equipmentLogs', (r: any) => [r.operatorId, r.operatorName], (r: any) => r.date);
           setEquipmentLogs((prevLocal) => {
             const map = new Map();
             survivingEq.forEach((e: any) => map.set(e.id, e));
@@ -2489,6 +2557,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     }
 
+    // This reset previously had no server call whatsoever, so it always came
+    // back. Tombstone + a real endpoint now make it stick.
+    tombstoneCollections(['outerBuyings', 'rollBuyings']);
+    fetch('/api/material-reset', { method: 'POST' }).catch(() => {});
     setOuterBuyings([]);
     setRollBuyings([]);
 
@@ -2603,6 +2675,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }).catch(() => {});
 
     // 4. now clear live state
+    tombstoneCollections(['production', 'outerBuyings', 'rollBuyings', 'packagingRolls']);
     setProduction([]);
     setOuterBuyings([]);
     setRollBuyings([]);
@@ -2694,6 +2767,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     fetch('/api/repairs-fuel-reset', { method: 'POST' }).catch(() => {});
 
     // 4. clear live state
+    tombstoneCollections(['repairs', 'fuel']);
     setRepairs([]);
     setFuel([]);
 
@@ -2777,6 +2851,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       body: JSON.stringify(archive),
     }).catch(() => {});
 
+    // Marks attendance as emptied so a later sync cannot resurrect it when the
+    // backend is unreachable.
+    tombstoneCollections(['attendance']);
     setAttendance([]);
     logAudit(
       'ATTENDANCE_RESET',
