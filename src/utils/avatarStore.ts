@@ -39,6 +39,25 @@ import { idbStorage } from './indexedDBStorage';
 
 const LS_PREFIX = 'user_avatar_';
 
+/**
+ * Session-tier avatar cache.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Google AI Studio (and GitHub Pages previews, and any `sandbox`-ed iframe)
+ * can deny BOTH localStorage and IndexedDB - in an opaque origin every access
+ * throws SecurityError, or storage is silently partitioned away. When that
+ * happened the picture survived only until the next render, so it seemed to
+ * vanish "immediately after page navigation".
+ *
+ * This Map is always available, is written synchronously on save, and is
+ * consulted FIRST on read. It guarantees the picture never disappears for the
+ * life of the page - which covers in-app navigation and tab switching. The
+ * persistent tiers below still handle a genuine reload/restart when they are
+ * permitted.
+ */
+const sessionAvatarCache = new Map<string, string>();
+
 /** Synchronous localStorage mirror key for an employee. */
 const mirrorKey = (employeeId: string) => `${LS_PREFIX}${employeeId}`;
 
@@ -51,6 +70,9 @@ const isUsable = (url?: string | null): url is string =>
  */
 export async function cacheAvatar(employeeId: string, dataUrl: string): Promise<void> {
   if (!employeeId || !isUsable(dataUrl)) return;
+
+  // Session tier: synchronous and cannot fail.
+  sessionAvatarCache.set(employeeId, dataUrl);
 
   try {
     await idbStorage.saveMediaItem(mirrorKey(employeeId), dataUrl);
@@ -74,6 +96,10 @@ export async function cacheAvatar(employeeId: string, dataUrl: string): Promise<
 /** Synchronous read from the localStorage mirror (may be empty on first load). */
 export function getCachedAvatarSync(employeeId?: string): string | undefined {
   if (!employeeId) return undefined;
+
+  const fromSession = sessionAvatarCache.get(employeeId);
+  if (isUsable(fromSession)) return fromSession;
+
   try {
     const value = localStorage.getItem(mirrorKey(employeeId));
     return isUsable(value) ? value : undefined;
@@ -85,6 +111,10 @@ export function getCachedAvatarSync(employeeId?: string): string | undefined {
 /** Authoritative read from IndexedDB. */
 export async function getCachedAvatar(employeeId?: string): Promise<string | undefined> {
   if (!employeeId) return undefined;
+
+  const fromSession = sessionAvatarCache.get(employeeId);
+  if (isUsable(fromSession)) return fromSession;
+
   try {
     const value = await idbStorage.getMediaItem(mirrorKey(employeeId));
     return isUsable(value) ? value : undefined;
@@ -94,6 +124,7 @@ export async function getCachedAvatar(employeeId?: string): Promise<string | und
 }
 
 export function removeCachedAvatar(employeeId: string): void {
+  sessionAvatarCache.delete(employeeId);
   try {
     localStorage.removeItem(mirrorKey(employeeId));
   } catch {

@@ -149,6 +149,7 @@ interface AppContextType {
   approveCheckOut: (attendanceId: string, approved: boolean) => void;
   resetAttendance: (password: string) => boolean;
   resetMaterialBuyings: (password: string) => boolean;
+  resetProductionRecords: (password: string) => boolean;
   overrideSalary: (userId: string, newMonthlyLe: number, reason: string) => void;
 
   // Sales
@@ -213,6 +214,62 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+/**
+ * Collapse attendance rows that describe the SAME person on the SAME day.
+ *
+ * Why this exists: a check-in is written locally with an id of `att-<epoch>`,
+ * then pushed to the server which stores it under its own numeric serial and
+ * sends it back. Merging on `id` therefore kept BOTH copies, so the approval
+ * queue showed the same worker two or more times for one day.
+ *
+ * Keying on (user, date) instead collapses them. When two rows collide we keep
+ * the one carrying the most information, so a check-out or an approval is
+ * never lost by the merge.
+ */
+const attendanceKey = (r: { userId?: string; employeeId?: string; date?: string }): string => {
+  const who = (r.userId || r.employeeId || '').toString().trim().toLowerCase();
+  const when = (r.date || '').toString().trim();
+  return `${who}::${when}`;
+};
+
+const attendanceRichness = (r: any): number =>
+  (r.checkOutTime ? 8 : 0) +
+  (r.checkOutStatus ? 4 : 0) +
+  (r.status && r.status !== 'pending' ? 2 : 0) +
+  (r.approvedBy ? 1 : 0);
+
+export const dedupeAttendance = <T extends { userId?: string; employeeId?: string; date?: string }>(
+  list: T[]
+): T[] => {
+  if (!Array.isArray(list)) return [];
+  const byKey = new Map<string, T>();
+  list.forEach((rec) => {
+    const key = attendanceKey(rec);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, rec);
+      return;
+    }
+    const incoming: any = rec;
+    const kept: any = existing;
+    // Keep the richer record, but carry over any field it is missing.
+    const winner = attendanceRichness(incoming) > attendanceRichness(kept) ? incoming : kept;
+    const loser = winner === incoming ? kept : incoming;
+    byKey.set(key, {
+      ...winner,
+      checkOutTime: winner.checkOutTime ?? loser.checkOutTime,
+      checkOutStatus: winner.checkOutStatus ?? loser.checkOutStatus,
+      checkOutApprovedBy: winner.checkOutApprovedBy ?? loser.checkOutApprovedBy,
+      checkOutApprovedAt: winner.checkOutApprovedAt ?? loser.checkOutApprovedAt,
+      approvedBy: winner.approvedBy ?? loser.approvedBy,
+      approvedAt: winner.approvedAt ?? loser.approvedAt,
+      location: winner.location ?? loser.location,
+      notes: winner.notes ?? loser.notes,
+    });
+  });
+  return Array.from(byKey.values());
+};
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Collections with hardened try-catch JSON parsing
@@ -357,7 +414,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const MOCK_NAMES = ['brima sesay', 'mohamed kamara', 'alpha koroma', 'ibrahim conteh', 'alusine kamara', 'mohamed sesay'];
 
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => safeLoad('puremax_attendance_v3', []));
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() =>
+    dedupeAttendance(safeLoad<AttendanceRecord[]>('puremax_attendance_v3', []))
+  );
   const [sales, setSales] = useState<SalesRecord[]>(() => safeLoad('puremax_sales_v3', []));
   const [production, setProduction] = useState<ProductionRecord[]>(() => safeLoad('puremax_production_v3', []));
   const [outerBuyings, setOuterBuyings] = useState<OuterBuyingRecord[]>(() => safeLoad('puremax_outer_buyings_v3', []));
@@ -1094,12 +1153,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             notes: a.notes || '',
             approvedBy: a.verifiedBy || a.verified_by || a.approvedBy,
           }));
-          setAttendance((prevLocal) => {
-            const map = new Map();
-            mapped.forEach((item: any) => map.set(item.id, item));
-            prevLocal.forEach((item: any) => map.set(item.id, item));
-            return Array.from(map.values());
-          });
+          setAttendance((prevLocal) =>
+            // Keyed on (user, date), NOT id - a local `att-<epoch>` row and
+            // the server's numeric row are the same shift and must collapse.
+            dedupeAttendance([...(prevLocal || []), ...mapped])
+          );
         }
       }
 
@@ -1408,7 +1466,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   useEffect(() => {
-    safeLocalStorageSet('puremax_attendance_v3', attendance);
+    safeLocalStorageSet('puremax_attendance_v3', dedupeAttendance(attendance));
   }, [attendance]);
 
   useEffect(() => {
@@ -2100,6 +2158,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // tap (or a background re-sync) produced a duplicate row in the approval
     // queue. One user may only ever have ONE open (un-checked-out) record per
     // day; if they already checked out, a new session is legitimate.
+    //
+    // NOTE: this guard was silently dropped by commit c81ee00 and the
+    // duplicates came straight back. Do not remove it again - it is the
+    // primary fix for duplicate pending rows in the approval queue.
+    const openToday = attendance.find(
+      (a) => a.userId === currentUser.id && a.date === todayStr && !a.checkOutTime
+    );
+    if (openToday) {
+      showToast(
+        `You already checked in today at ${openToday.checkInTime}. Duplicate check-in blocked.`,
+        'warning',
+        'Already Checked In'
+      );
+      return;
+    }
+
     const newRec: AttendanceRecord = {
       id: `att-${Date.now()}`,
       userId: currentUser.id,
@@ -2331,6 +2405,116 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       `Material logs reset. ${outerCount} Outer records and ${rollCount} Roll records removed.`,
       'success',
       'Reset Complete'
+    );
+    return true;
+  };
+
+  /**
+   * Full production reset — "Reset Production & Roll Records".
+   *
+   * Clears EVERYTHING the Production Engineer produces:
+   *   production      -> engineer batch logs (drives Total Bundles Produced
+   *                      and every bar chart, so those return to 0)
+   *   outerBuyings    -> outer film / set counters
+   *   rollBuyings     -> roll buying (KG) history
+   *   packagingRolls  -> live roll inventory weights and per-roll bundle counts
+   *
+   * The earlier reset only touched outer + roll buying, which is why roll
+   * inventory KG, outer film usage and the 550-bundle chart total survived.
+   *
+   * Same archive-first ordering as the other resets: nothing is deleted until
+   * the backup has been written.
+   */
+  const resetProductionRecords = (password: string): boolean => {
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to reset production records.', 'error', 'Not Authorised');
+      return false;
+    }
+    if (!canPurgeRecords(actor.role as UserRole)) {
+      showToast('Only a Manager or Developer may reset production records.', 'error', 'Access Denied');
+      return false;
+    }
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Production records were NOT reset.', 'error', 'Verification Failed');
+      logAudit('PRODUCTION_RESET_DENIED', `${actor.name} entered a wrong reset password`);
+      return false;
+    }
+
+    const counts = {
+      production: production.length,
+      outerBuyings: outerBuyings.length,
+      rollBuyings: rollBuyings.length,
+      packagingRolls: packagingRolls.length,
+    };
+    const total = counts.production + counts.outerBuyings + counts.rollBuyings + counts.packagingRolls;
+
+    if (total === 0) {
+      showToast('There are no production records to reset.', 'info', 'Nothing To Reset');
+      return true;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archive = {
+      kind: 'PRODUCTION_RESET',
+      createdAt: new Date().toISOString(),
+      resetBy: { name: actor.name, employeeId: actor.employeeId, role: actor.role },
+      counts,
+      production,
+      outerBuyings,
+      rollBuyings,
+      packagingRolls,
+    };
+
+    // 1. durable local archive
+    try {
+      localStorage.setItem(`puremax_production_reset_${stamp}`, JSON.stringify(archive));
+    } catch {
+      /* quota - the Excel download below is the real safety net */
+    }
+    idbStorage.saveMediaItem(`production-reset-${stamp}`, JSON.stringify(archive)).catch(() => {});
+
+    // 2. Excel workbook, one sheet per collection
+    try {
+      const wb = XLSX.utils.book_new();
+      const add = (name: string, rows: any[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ '(no records)': '' }]);
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+      };
+      add('Production Batches', production);
+      add('Outer Buying', outerBuyings);
+      add('Roll Buying', rollBuyings);
+      add('Roll Inventory', packagingRolls);
+      XLSX.writeFile(wb, `Production_Reset_Backup_${stamp}.xlsx`);
+    } catch (err) {
+      console.warn('Production reset Excel export failed:', err);
+    }
+
+    // 3. best-effort server copy
+    fetch('/api/production-reset-archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(archive),
+    }).catch(() => {});
+
+    // 4. now clear live state
+    setProduction([]);
+    setOuterBuyings([]);
+    setRollBuyings([]);
+    setPackagingRolls([]);
+
+    logAudit(
+      'PRODUCTION_RESET',
+      `${actor.name} (${actor.employeeId}) reset ALL production records ` +
+        `(${counts.production} batches, ${counts.outerBuyings} outer, ` +
+        `${counts.rollBuyings} roll buys, ${counts.packagingRolls} rolls) after password verification`,
+      actor
+    );
+    showToast(
+      `Production reset. ${counts.production} batches, ${counts.outerBuyings} outer sets, ` +
+        `${counts.rollBuyings} roll purchases and ${counts.packagingRolls} inventory rolls cleared. Charts now read 0.`,
+      'success',
+      'Production Reset Complete'
     );
     return true;
   };
@@ -3319,6 +3503,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         approveCheckOut,
         resetAttendance,
         resetMaterialBuyings,
+        resetProductionRecords,
         overrideSalary,
         addSalesRecord,
         addProductionRecord,

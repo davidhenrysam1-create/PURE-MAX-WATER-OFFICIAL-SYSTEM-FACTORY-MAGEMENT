@@ -681,6 +681,41 @@ app.get('/api/attendance', async (req: Request, res: Response) => {
 });
 
 
+/**
+ * Reset archives.
+ *
+ * The client writes the recovery snapshot to IndexedDB and downloads an Excel
+ * workbook BEFORE deleting anything. These endpoints give the server a
+ * durable copy too. They only ever INSERT an audit record - they never touch
+ * live data, so a stale or repeated call can not destroy anything.
+ */
+const recordResetArchive = async (kind: string, req: Request, res: Response) => {
+  try {
+    const archive = req.body || {};
+    const actor = archive.resetBy || {};
+    await db.insert(auditLogs).values({
+      userId: actor.employeeId || 'system',
+      userName: actor.name || 'Unknown',
+      userRole: actor.role || 'system',
+      action: `${kind}_RESET_ARCHIVE`,
+      details: JSON.stringify({
+        createdAt: archive.createdAt,
+        recordCount: archive.recordCount ?? archive.counts ?? null,
+        resetBy: actor,
+      }),
+      timestamp: new Date().toISOString(),
+      ipAddress: req.ip,
+    });
+    res.json({ success: true, stored: true });
+  } catch (err) {
+    console.error(`Error storing ${kind} reset archive:`, err);
+    res.status(500).json({ error: String(err) });
+  }
+};
+
+app.post('/api/attendance-reset-archive', (req, res) => recordResetArchive('ATTENDANCE', req, res));
+app.post('/api/production-reset-archive', (req, res) => recordResetArchive('PRODUCTION', req, res));
+
 app.post('/api/attendance-reset', async (req, res) => {
   try {
     await db.delete(attendance);

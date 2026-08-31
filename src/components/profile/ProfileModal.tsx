@@ -56,6 +56,21 @@ export const ProfileModal: React.FC = () => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  /**
+   * Keep the on-screen picture in step with the saved profile.
+   *
+   * `avatarUrl` is seeded from `currentUser` once at mount, so navigating away
+   * and back (or receiving an update from another device) used to leave the
+   * form showing a stale/blank picture even though the save had succeeded.
+   */
+  useEffect(() => {
+    const stored = currentUser?.avatarUrl;
+    if (stored) setAvatarUrl(stored);
+    if (currentUser?.name) setName(currentUser.name);
+    if (currentUser?.phone) setPhone(currentUser.phone);
+    if (currentUser?.email) setEmail(currentUser.email);
+  }, [currentUser?.avatarUrl, currentUser?.id, currentUser?.name, currentUser?.phone, currentUser?.email]);
   
   // Camera live capture state
   const [isCameraActive, setIsCameraActive] = useState(false);

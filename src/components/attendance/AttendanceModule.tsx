@@ -105,7 +105,37 @@ export const AttendanceModule: React.FC = () => {
 
   const autoAssignedLocation = currentUser?.department || getStationForRole(currentUser?.role);
 
-  const filteredAttendance = attendance.filter((a) => {
+  /**
+   * Collapse records so one (account, day) is never listed twice. A local
+   * `att-<epoch>` row and the server's numeric row for the same shift arrive
+   * with different ids, so without this the table repeats the same day.
+   */
+  const dedupedAttendance = useMemo(() => {
+    const byKey = new Map<string, AttendanceRecord>();
+    attendance.forEach((rec) => {
+      const key = `${rec.userId || rec.employeeId}::${rec.date}`;
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, rec);
+        return;
+      }
+      // Prefer whichever copy carries more detail.
+      const score = (r: AttendanceRecord) =>
+        (r.checkOutTime ? 8 : 0) +
+        (r.checkOutStatus ? 4 : 0) +
+        (r.status && r.status !== 'pending' ? 2 : 0);
+      const winner = score(rec) > score(existing) ? rec : existing;
+      const loser = winner === rec ? existing : rec;
+      byKey.set(key, {
+        ...winner,
+        checkOutTime: winner.checkOutTime ?? loser.checkOutTime,
+        checkOutStatus: winner.checkOutStatus ?? loser.checkOutStatus,
+      });
+    });
+    return Array.from(byKey.values());
+  }, [attendance]);
+
+  const filteredAttendance = dedupedAttendance.filter((a) => {
     // Restricted Staff ONLY view their own attendance records!
     if (isRestrictedStaff && !canApprove && a.userId !== currentUser?.id) {
       return false;
@@ -443,12 +473,12 @@ export const AttendanceModule: React.FC = () => {
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 font-bold uppercase text-[10px]">
-                    <th className="py-3 px-3">Worker</th>
-                    <th className="py-3 px-3">Role</th>
+                    {canApprove && <th className="py-3 px-3">Worker</th>}
+                    {canApprove && <th className="py-3 px-3">Role</th>}
                     <th className="py-3 px-3">Date</th>
                     <th className="py-3 px-3">Check-In</th>
-                    <th className="py-3 px-3">Check-Out</th>
-                    <th className="py-3 px-3">Location</th>
+                    {canApprove && <th className="py-3 px-3">Check-Out</th>}
+                    {canApprove && <th className="py-3 px-3">Location</th>}
                     <th className="py-3 px-3">Status</th>
                     {canApprove && <th className="py-3 px-3 text-right">Actions</th>}
                   </tr>
@@ -456,10 +486,15 @@ export const AttendanceModule: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {filteredAttendance.map((rec) => (
                     <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">{rec.userName}</td>
-                      <td className="py-3 px-3 capitalize text-slate-500">{rec.userRole.replace('_', ' ')}</td>
+                      {canApprove && (
+                        <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">{rec.userName}</td>
+                      )}
+                      {canApprove && (
+                        <td className="py-3 px-3 capitalize text-slate-500">{rec.userRole.replace('_', ' ')}</td>
+                      )}
                       <td className="py-3 px-3 font-mono text-slate-500">{rec.date}</td>
                       <td className="py-3 px-3 font-bold text-blue-600 dark:text-blue-400 font-mono">{rec.checkInTime}</td>
+                      {canApprove && (
                       <td className="py-3 px-3">
                         <span className="font-mono text-slate-500">{rec.checkOutTime || '--:--'}</span>
                         {rec.checkOutTime && (
@@ -476,10 +511,13 @@ export const AttendanceModule: React.FC = () => {
                           </span>
                         )}
                       </td>
+                      )}
+                      {canApprove && (
                       <td className="py-3 px-3 text-slate-500 flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
                         <span>{rec.location || 'Factory Floor'}</span>
                       </td>
+                      )}
                       <td className="py-3 px-3">
                         <span
                           className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${

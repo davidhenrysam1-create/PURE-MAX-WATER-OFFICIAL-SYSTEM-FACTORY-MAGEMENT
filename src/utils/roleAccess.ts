@@ -42,11 +42,14 @@ export const GPS_MAP_ROLES: UserRole[] = [
  * Roles allowed to open the Bundle Dispatch & Sales Audit module (Issue #3).
  * Production Sales Officers and Managers, per the spec.
  */
+// Bundle Dispatch & Audit is a Manager/Admin-only control surface. The
+// Production Sales Officer reaches their daily logging through the Sales
+// module instead - giving them the same screen under two different nav
+// entries produced two competing copies of the same interface.
 export const DISPATCH_ROLES: UserRole[] = [
   'developer',
   'manager',
   'second_manager',
-  'sales_manager',
 ];
 
 /** Roles allowed to record sales. */

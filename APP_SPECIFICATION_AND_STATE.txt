@@ -1130,3 +1130,123 @@ VERIFICATION
   npm run build     -> success (2335 modules, dist/index.html + assets,
                        dist/server.cjs)
 ================================================================================
+
+================================================================================
+SESSION — Bug Report Fix: attendance, sales nav, production reset, avatar
+================================================================================
+Owner submitted a formal bug report with 6 items. All addressed below.
+
+--------------------------------------------------------------------------------
+1. ATTENDANCE DUPLICATE ROWS  — ROOT CAUSE WAS A REGRESSION
+--------------------------------------------------------------------------------
+Commit c81ee00 ("feat: add attendance reset endpoint and logic") DELETED the
+duplicate check-in guard that was added in the previous session. The explanatory
+comment survived but the code was removed, which is exactly why duplicates
+reappeared.
+
+Restored, and reinforced with two independent layers:
+  a) early-return guard in checkIn() using the current `attendance` array
+  b) race-safe guard inside setAttendance(prev => ...) — this one is the
+     important one, because it reads `prev` and therefore catches a rapid
+     double-tap before React re-renders
+
+SECOND, PREVIOUSLY UNDIAGNOSED CAUSE — found this session:
+  refreshCloudData() merged server attendance with
+      map.set(item.id, item)
+  A check-in is created locally with id `att-<epoch>`; the server stores it
+  under its own numeric serial and returns it. Two different ids for ONE shift
+  => two rows for the same person on the same day. This is why duplicates kept
+  appearing even with the check-in guard in place.
+
+  Fixed with a new exported helper dedupeAttendance() that collapses on
+  (userId|employeeId, date) and keeps whichever copy carries the most
+  information (check-out time, approval, approver) so nothing is lost.
+  Applied at three points: initial load, server merge, and persistence.
+  AttendanceModule additionally dedupes its own working list.
+
+STAFF VIEW RESTRICTED
+  For non-approvers the table now renders only Date | Check-In | Status.
+  Worker, Role, Check-Out, Location and Actions columns are approver-only.
+
+--------------------------------------------------------------------------------
+2. SALES MODULE — NAVIGATION & ROLE ACCESS
+--------------------------------------------------------------------------------
+- DISPATCH_ROLES no longer contains 'sales_manager'. Bundle Dispatch & Audit is
+  now developer / manager / second_manager only.
+- Removed the "Open Daily Sales Records" button from the Sales Production
+  Officer dashboard card. It pointed at the `production` tab, which renders
+  SalesDailyRecordsModule — the identical module already reachable via the
+  `dispatch` tab. Two doors to one screen was the reported "redundant
+  interfaces performing identical functions".
+
+--------------------------------------------------------------------------------
+3 & 4. PRODUCTION RESET — INCOMPLETE WIPE + NEW PASSWORD-GATED ACTION
+--------------------------------------------------------------------------------
+The existing resetMaterialBuyings() only cleared outerBuyings and rollBuyings.
+Roll inventory weights, production batch logs and every derived chart survived
+— matching the report that "Total Bundles Produced (550)" kept rendering.
+
+New AppContext.resetProductionRecords(password) clears ALL FOUR collections:
+  production      -> engineer batch logs (Total Bundles Produced and every bar
+                     chart are computed from this, so they return to 0)
+  outerBuyings    -> outer film / set counters
+  rollBuyings     -> roll buying (KG) history
+  packagingRolls  -> live roll inventory weights and per-roll bundle counts
+
+Gated by canPurgeRecords(role) + verifyPrivilegedPassword(). Wrong passwords are
+audited as PRODUCTION_RESET_DENIED and nothing is deleted.
+
+Safety ordering (identical to the other resets): archive to localStorage +
+IndexedDB + a multi-sheet Excel workbook (Production_Reset_Backup_<stamp>.xlsx)
++ POST to /api/production-reset-archive, and ONLY THEN clear state.
+
+UI: new red "Reset Production & Roll Records" button in the Production card,
+Manager/Developer only, opening a modal that lists exactly what will be
+destroyed (with live counts) and requires the password.
+
+--------------------------------------------------------------------------------
+5. PROFILE PICTURE PERSISTENCE
+--------------------------------------------------------------------------------
+Two distinct causes:
+
+a) Google AI Studio serves the app inside a sandboxed iframe. In an opaque
+   origin, localStorage AND IndexedDB access can throw SecurityError or be
+   partitioned away. Both persistent tiers were therefore unavailable, so the
+   picture lived only until the next render — the reported "disappears
+   immediately after page navigation".
+   Fix: avatarStore.ts now keeps a module-level sessionAvatarCache Map. It is
+   written synchronously on save, cannot fail, and is consulted FIRST on read.
+   The picture is now guaranteed for the life of the page (covers in-app
+   navigation and tab switching); the persistent tiers still cover a real
+   reload when the browser permits them.
+
+b) ProfileModal seeded `avatarUrl` from currentUser once at mount and never
+   re-synced, so a late-arriving update left the form showing a stale/blank
+   picture. Added a useEffect that re-syncs avatar/name/phone/email whenever
+   currentUser changes.
+
+--------------------------------------------------------------------------------
+6. REGRESSION AUDIT
+--------------------------------------------------------------------------------
+Reviewed 6215e1c, c81ee00 and the merge history against main.
+- Confirmed the check-in guard deletion (see item 1) and restored it.
+- c81ee00 widened the purge predicate to
+      owns = (id) => !id || staffIds.has(id) || id === 'demo' || id === 'system'
+  This makes any record with a missing/null author id eligible for purge. It was
+  deliberate (demo-data cleanup) but is aggressive — FLAGGED for owner review.
+- Client archive POSTs previously targeted /api/attendance-reset-archive and
+  /api/production-reset-archive, which did not exist (silent 404). Added both
+  endpoints to server.ts; they insert an auditLogs row and never mutate live
+  data, so a repeated or stale call cannot destroy anything.
+- NOTE: package-lock.json is still missing from the repo (deleted by 6215e1c).
+  Builds are therefore not reproducible. Recommend regenerating it.
+- ~25 leftover one-off patch scripts (fix_*.py, patch_*.sh, wipe_mock*.sh,
+  add_attendance_reset.cjs, test_prod.js …) sit in the repo root. None are
+  referenced by the app. Left in place pending owner approval to delete.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0
+  npm run build -> success
+================================================================================
