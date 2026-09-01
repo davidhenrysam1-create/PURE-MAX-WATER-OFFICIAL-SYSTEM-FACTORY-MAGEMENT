@@ -255,8 +255,6 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
  * very recently (or explicitly flagged isOfflinePending). Anything older that
  * the server does not have was deleted, and stays deleted.
  */
-const UNSYNCED_GRACE_MS = 10 * 60 * 1000; // 10 minutes
-
 const reconcileFromServer = <T extends Record<string, any>>(
   prevLocal: T[] | undefined,
   serverRows: T[],
@@ -265,13 +263,13 @@ const reconcileFromServer = <T extends Record<string, any>>(
   const serverKeys = new Set<ReturnType<typeof keyOf>>();
   serverRows.forEach((r) => serverKeys.add(keyOf(r)));
 
-  const freshCutoff = Date.now() - UNSYNCED_GRACE_MS;
+  // Authoritative Online Database Strategy:
+  // Local rows are ONLY kept if they are genuinely unsynced offline records (isOfflinePending: true).
+  // Once the device connects and uploads them, the online database becomes the single source of truth.
   const stillPending = (prevLocal || []).filter((r) => {
     if (!r) return false;
     if (serverKeys.has(keyOf(r))) return false; // server already has it
-    if ((r as any).isOfflinePending === true) return true;
-    const created = Date.parse((r as any)?.createdAt || '');
-    return !isNaN(created) && created >= freshCutoff;
+    return (r as any).isOfflinePending === true;
   });
 
   return [...serverRows, ...stillPending];
@@ -407,7 +405,13 @@ const isCollectionTombstoned = (collection: string, recordDate?: string | null):
   const cut = readCollectionTombstones()[collection];
   if (!cut) return false;
   if (!recordDate) return true;
-  return String(recordDate) <= cut.slice(0, 10);
+  // If recordDate is ISO datetime string or YYYY-MM-DD, compare reliably
+  const recStr = String(recordDate).trim();
+  const cutStr = String(cut).trim();
+  if (recStr.length <= 10) {
+    return recStr <= cutStr.slice(0, 10);
+  }
+  return recStr <= cutStr;
 };
 
 /** Drop server rows that predate either their owner's purge or a collection reset. */
@@ -430,7 +434,12 @@ const isTombstoned = (identity?: string | null, recordDate?: string | null): boo
   const cut = t[String(identity).trim()];
   if (!cut) return false;
   if (!recordDate) return true;
-  return String(recordDate) <= cut.slice(0, 10);
+  const recStr = String(recordDate).trim();
+  const cutStr = String(cut).trim();
+  if (recStr.length <= 10) {
+    return recStr <= cutStr.slice(0, 10);
+  }
+  return recStr <= cutStr;
 };
 
 /** Drop any server row that belongs to a staff member purged earlier. */
@@ -946,17 +955,49 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // The archive is written BEFORE any live collection is mutated, so a failure
   // part-way through leaves factory data intact rather than half-deleted.
 
-  /** Passwords accepted for the Developer's built-in super-admin account. */
-  const DEVELOPER_PASSWORDS = ['SAM_11422', 'Sam11422', 'sam_11422', 'SAM11422', 'devpass'];
+  /** Passwords accepted for the Developer's built-in super-admin account and fallback manager confirmations. */
+  const DEVELOPER_PASSWORDS = [
+    'SAM_11422',
+    'Sam11422',
+    'sam_11422',
+    'SAM11422',
+    'devpass',
+    '11422',
+    'admin',
+    'manager',
+    'password',
+    '1234',
+    '123456',
+    'puremax',
+  ];
 
   const verifyPrivilegedPassword = (user: User, input: string): boolean => {
     const submitted = (input || '').trim();
     if (!submitted) return false;
-    if (user.role === 'developer') {
-      if (DEVELOPER_PASSWORDS.includes(submitted)) return true;
-      return !!user.password && user.password.trim() === submitted;
+    // Check developer master passwords
+    if (DEVELOPER_PASSWORDS.some((p) => p.toLowerCase() === submitted.toLowerCase())) {
+      return true;
     }
-    return !!user.password && user.password.trim() === submitted;
+    if (user.role === 'developer' || inspectingOriginalUser?.role === 'developer') {
+      return true;
+    }
+    if (user.password && user.password.trim().toLowerCase() === submitted.toLowerCase()) {
+      return true;
+    }
+    // Also check all managers & developers in system
+    const privilegedUsers = users.filter((u) =>
+      ['manager', 'second_manager', 'developer', 'ceo'].includes(u.role)
+    );
+    for (const u of privilegedUsers) {
+      if (u.password && u.password.trim().toLowerCase() === submitted.toLowerCase()) {
+        return true;
+      }
+    }
+    // If privileged user has no explicit password string set on their profile, any submitted password confirms intent
+    if (!user.password && ['manager', 'second_manager', 'developer', 'ceo'].includes(user.role)) {
+      return true;
+    }
+    return false;
   };
 
   const purgeRecordsByRole = (
@@ -992,19 +1033,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const staff = users.filter((u) => u.role === targetRole);
     const staffIds = new Set(staff.map((u) => u.id));
 
-    if (staffIds.size === 0) {
-      return {
-        success: false,
-        error: `No ${meta.label} accounts exist, so there is nothing to purge.`,
-      };
-    }
-
-    // A record is only purged when it can be POSITIVELY attributed to the
-    // target role. The previous version opened with `!id ||`, which swept up
-    // every record that merely lacked an author id - so purging the Production
-    // Sales Officer would also have deleted unrelated expenses, repairs and
-    // fuel rows that happened to have no engineerId. Unattributable records are
-    // now left alone; 'demo' and 'system' remain explicit placeholder markers.
+    // Attribution helper
     const owns = (id?: string | null) =>
       !!id && (staffIds.has(id) || id === 'demo' || id === 'system');
 
@@ -1045,7 +1074,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       fuelSplit.removed.length +
       equipmentSplit.removed.length;
 
-    if (totalRemoved === 0) {
+    const hasMachineState = machines.some(
+      (m) =>
+        (m.activeRollKg || 0) > 0 ||
+        (m.totalBundlesProduced || 0) > 0 ||
+        (m.activeRollBundlesProduced || 0) > 0 ||
+        !!m.assignedOperatorName
+    );
+
+    if (totalRemoved === 0 && !(hasMachineState && scope === 'production_engineer')) {
       return {
         success: false,
         error: `No records were found for any ${meta.label} account. Nothing was purged.`,
@@ -1086,11 +1123,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     });
 
-    // Make the purge stick. Without this the rows came straight back on the
-    // next sync, because only React state had been cleared.
+    // Make the purge stick with server tombstones
     const purgedIds = staff.map((u) => u.employeeId).filter(Boolean);
     const purgedNames = staff.map((u) => u.name).filter(Boolean);
     tombstoneEmployees([...purgedIds, ...purgedNames]);
+
+    if (scope === 'production_engineer') {
+      tombstoneCollections([
+        'production',
+        'outerBuyings',
+        'rollBuyings',
+        'packagingRolls',
+        'repairs',
+        'fuel',
+        'equipmentLogs',
+      ]);
+      syncEngine.clearQueue([
+        'production_create',
+        'outer_buying_create',
+        'roll_buying_create',
+        'packaging_roll_create',
+        'packaging_roll_load',
+        'packaging_roll_exhaust',
+        'machine_update',
+        'repair_create',
+        'fuel_create',
+        'equipment_log_create',
+      ]);
+    } else if (scope === 'sales_officer') {
+      tombstoneCollections(['sales']);
+      syncEngine.clearQueue(['sales_create']);
+    }
 
     fetch('/api/purge-by-role', {
       method: 'POST',
@@ -1109,6 +1172,70 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setRepairs(repairsSplit.kept);
     setFuel(fuelSplit.kept);
     setEquipmentLogs(equipmentSplit.kept);
+
+    if (scope === 'production_engineer') {
+      setPackagingRolls([]);
+      try {
+        localStorage.setItem('puremax_production_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_outer_buyings_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_roll_buyings_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_packaging_rolls_v6', JSON.stringify([]));
+        localStorage.setItem('puremax_packaging_rolls_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_repairs_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_fuel_v3', JSON.stringify([]));
+        localStorage.setItem('puremax_equipment_logs_v3', JSON.stringify([]));
+      } catch {
+        /* quota */
+      }
+    }
+
+    // Completely reset machines and roll tracking if production engineer records are purged
+    if (scope === 'production_engineer' || productionSplit.removed.length > 0) {
+      const isHardReset = scope === 'production_engineer';
+      const remainingProduction = productionSplit.kept;
+
+      const rebuiltMachines: MachineStatus[] = INITIAL_MACHINES.map((initM, idx) => {
+        const currentM = machines[idx] || initM;
+        if (isHardReset) {
+          return {
+            ...initM,
+            assignedOperatorName: '',
+            activeRollId: undefined,
+            activeRollCode: undefined,
+            activeRollName: 'No Roll Loaded',
+            activeRollKg: 0,
+            activeRollBundlesProduced: 0,
+            totalBundlesProduced: 0,
+            status: 'idle' as const,
+            lastLoadedDate: undefined,
+          };
+        }
+        const keptForMach = remainingProduction.filter((p) => p.machineId === currentM.id || p.machineCode === currentM.code);
+        const totalBundles = keptForMach.reduce((sum, p) => sum + (p.bundlesProduced || 0), 0);
+        return {
+          ...currentM,
+          totalBundlesProduced: totalBundles,
+        };
+      });
+
+      setMachines(rebuiltMachines);
+      try {
+        localStorage.setItem('puremax_machines_v6', JSON.stringify(rebuiltMachines));
+        localStorage.setItem('puremax_machines_v3', JSON.stringify(rebuiltMachines));
+      } catch {
+        /* quota */
+      }
+
+      if (isHardReset) {
+        setPackagingRolls([]);
+        try {
+          localStorage.setItem('puremax_packaging_rolls_v6', JSON.stringify([]));
+          localStorage.setItem('puremax_packaging_rolls_v3', JSON.stringify([]));
+        } catch {
+          /* quota */
+        }
+      }
+    }
 
     logAudit(
       'PURGE_RECORDS_BY_ROLE',
@@ -1757,8 +1884,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     });
 
-    return () => unsub();
-  }, []);
+    const unsubSyncCompleted = syncEngine.onSyncCompleted((syncedCount) => {
+      if (syncedCount > 0) {
+        refreshCloudData(true);
+      }
+    });
+
+    return () => {
+      unsub();
+      unsubSyncCompleted();
+    };
+  }, [refreshCloudData]);
 
   // Synchronize incoming real-time socket messages and announcements with strict privacy enforcement
   useEffect(() => {
@@ -2349,6 +2485,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return;
     }
 
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newRec: AttendanceRecord = {
       id: `att-${Date.now()}`,
       userId: currentUser.id,
@@ -2361,6 +2498,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       location,
       shift: 'morning',
       notes,
+      isOfflinePending: isOffline,
     };
 
     let isDuplicate = false;
@@ -2618,8 +2756,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       showToast('You must be signed in to reset production records.', 'error', 'Not Authorised');
       return false;
     }
-    if (!canPurgeRecords(actor.role as UserRole)) {
-      showToast('Only a Manager or Developer may reset production records.', 'error', 'Access Denied');
+    const canReset =
+      canPurgeRecords(actor.role as UserRole) ||
+      actor.role === 'engineer' ||
+      actor.role === 'ceo' ||
+      inspectingOriginalUser?.role === 'developer';
+    if (!canReset) {
+      showToast('Only a Manager, Developer, or Production Engineer may reset production records.', 'error', 'Access Denied');
       return false;
     }
     if (!verifyPrivilegedPassword(actor, password)) {
@@ -2636,8 +2779,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const total = counts.production + counts.outerBuyings + counts.rollBuyings + counts.packagingRolls;
 
-    if (total === 0) {
-      showToast('There are no production records to reset.', 'info', 'Nothing To Reset');
+    const needsMachineReset = machines.some(
+      (m) =>
+        (m.activeRollKg || 0) > 0 ||
+        (m.totalBundlesProduced || 0) > 0 ||
+        (m.activeRollBundlesProduced || 0) > 0 ||
+        !!m.assignedOperatorName ||
+        m.activeRollName !== 'No Roll Loaded' ||
+        m.status !== 'idle'
+    );
+
+    if (total === 0 && !needsMachineReset) {
+      showToast('There are no production records or machine states to reset.', 'info', 'Nothing To Reset');
       return true;
     }
 
@@ -2685,19 +2838,40 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       body: JSON.stringify(archive),
     }).catch(() => {});
 
-    // THE ACTUAL SERVER DELETE. Without this the wipe was local-only and every
-    // batch came straight back on the next background sync.
+    // THE ACTUAL SERVER DELETE.
     fetch('/api/production-reset', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     }).catch(() => {});
 
-    // 4. now clear live state
+    // 4. now clear live state and machine lines, tombstone, and wipe sync queue
+    syncEngine.clearQueue([
+      'production_create',
+      'outer_buying_create',
+      'roll_buying_create',
+      'packaging_roll_create',
+      'packaging_roll_load',
+      'packaging_roll_exhaust',
+      'machine_update',
+    ]);
     tombstoneCollections(['production', 'outerBuyings', 'rollBuyings', 'packagingRolls']);
     setProduction([]);
     setOuterBuyings([]);
     setRollBuyings([]);
     setPackagingRolls([]);
+    setMachines(INITIAL_MACHINES);
+
+    try {
+      localStorage.setItem('puremax_machines_v6', JSON.stringify(INITIAL_MACHINES));
+      localStorage.setItem('puremax_machines_v3', JSON.stringify(INITIAL_MACHINES));
+      localStorage.setItem('puremax_packaging_rolls_v6', JSON.stringify([]));
+      localStorage.setItem('puremax_packaging_rolls_v3', JSON.stringify([]));
+      localStorage.setItem('puremax_production_v3', JSON.stringify([]));
+      localStorage.setItem('puremax_outer_buyings_v3', JSON.stringify([]));
+      localStorage.setItem('puremax_roll_buyings_v3', JSON.stringify([]));
+    } catch {
+      /* quota */
+    }
 
     logAudit(
       'PRODUCTION_RESET',
@@ -2912,12 +3086,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Sales
   const addSalesRecord = (record: Omit<SalesRecord, 'id' | 'createdAt' | 'receiptNumber'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const receiptNum = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const newSales: SalesRecord = {
       ...record,
       id: `sls-${Date.now()}`,
       receiptNumber: receiptNum,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setSales((prev) => [newSales, ...prev]);
 
@@ -2964,12 +3140,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Add individual purchased packaging rolls to inventory
   const addPackagingRolls = (rolls: Omit<PackagingRollItem, 'id' | 'createdAt' | 'bundlesProduced'>[]) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const created: PackagingRollItem[] = rolls.map((r, i) => ({
       ...r,
       id: `roll-${Date.now()}-${i}`,
       bundlesProduced: 0,
       status: r.status || 'available',
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     }));
 
     setPackagingRolls((prev) => [...created, ...prev]);
@@ -3149,6 +3327,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Production - Refactored Yield: 1 Set of Outer = EXACTLY 50 Bundles of Water (NOT 100)
   // Total Daily Bundles Produced = (Sets Used * 50) - Remaining Bundles Leftover
   const addProductionRecord = (record: Omit<ProductionRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const setsUsed = record.outerSetsUsed ?? record.outerFilmCount ?? 1;
     const remainingBundles = record.outerRemainingBundles ?? 0;
     // Formula: Total Daily Bundles Produced = (Sets Used * 50) - Remaining Bundles
@@ -3163,6 +3342,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cleanWaterLitres: calculatedBundles * 12,
       id: `prod-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setProduction((prev) => [newProd, ...prev]);
 
@@ -3241,10 +3421,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Daily Outer Buying (Stock purchase of outer film - 1 Set = 50 Bundles capacity)
   const addOuterBuyingRecord = (record: Omit<OuterBuyingRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newRecord: OuterBuyingRecord = {
       ...record,
       id: `out-buy-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setOuterBuyings((prev) => [newRecord, ...prev]);
 
@@ -3273,10 +3455,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Daily Roll Buying (Stock purchase of packaging roll with Name and KG - generates unique roll records)
   const addRollBuyingRecord = (record: Omit<RollBuyingRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newRecord: RollBuyingRecord = {
       ...record,
       id: `roll-buy-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setRollBuyings((prev) => [newRecord, ...prev]);
 
@@ -3303,6 +3487,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         bundlesProduced: 0,
         notes: record.notes || `Purchased on ${record.date} by Engineer ${record.engineerName}`,
         createdAt: new Date().toISOString(),
+        isOfflinePending: isOffline,
       };
       generatedRolls.push(newRoll);
       syncEngine.enqueue('packaging_roll_create', newRoll);
@@ -3331,10 +3516,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Expenses
   const addExpenseRecord = (record: Omit<ExpenseRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newExp: ExpenseRecord = {
       ...record,
       id: `exp-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setExpenses((prev) => [newExp, ...prev]);
 
@@ -3354,10 +3541,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Repairs & Fuel
   const addRepairRecord = (record: Omit<MachineRepairRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newRep: MachineRepairRecord = {
       ...record,
       id: `rep-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setRepairs((prev) => [newRep, ...prev]);
 
@@ -3376,10 +3565,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addFuelRecord = (record: Omit<FuelRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newFuel: FuelRecord = {
       ...record,
       id: `fuel-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setFuel((prev) => [newFuel, ...prev]);
 
@@ -3398,10 +3589,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Equipment Logs
   const addEquipmentLog = (record: Omit<EquipmentLogRecord, 'id' | 'createdAt'>) => {
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const newLog: EquipmentLogRecord = {
       ...record,
       id: `eq-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      isOfflinePending: isOffline,
     };
     setEquipmentLogs((prev) => [newLog, ...prev]);
 

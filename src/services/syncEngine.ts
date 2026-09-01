@@ -41,6 +41,7 @@ class SyncEngine {
   private isSyncing = false;
   private listeners: ((pendingCount: number, isSyncing: boolean) => void)[] = [];
   private onRecordSyncedCallbacks: ((type: string, payload: any) => void)[] = [];
+  private onSyncCompletedCallbacks: ((syncedCount: number) => void)[] = [];
 
   constructor() {
     this.loadQueue();
@@ -138,8 +139,28 @@ class SyncEngine {
     };
   }
 
+  public onSyncCompleted(callback: (syncedCount: number) => void): () => void {
+    this.onSyncCompletedCallbacks.push(callback);
+    return () => {
+      this.onSyncCompletedCallbacks = this.onSyncCompletedCallbacks.filter((c) => c !== callback);
+    };
+  }
+
   private notify(): void {
     this.listeners.forEach((l) => l(this.queue.length, this.isSyncing));
+  }
+
+  /**
+   * Clears all or specific item types from the offline sync queue.
+   */
+  public clearQueue(types?: string[]): void {
+    if (types && types.length > 0) {
+      const typeSet = new Set(types);
+      this.queue = this.queue.filter((item) => !typeSet.has(item.type));
+    } else {
+      this.queue = [];
+    }
+    this.saveQueue();
   }
 
   /**
@@ -212,6 +233,13 @@ class SyncEngine {
 
     if (syncedCount > 0) {
       safeLocalStorageSet(LAST_SYNC_KEY, new Date().toISOString());
+      this.onSyncCompletedCallbacks.forEach((cb) => {
+        try {
+          cb(syncedCount);
+        } catch (err) {
+          console.warn('onSyncCompleted callback error:', err);
+        }
+      });
     }
 
     this.isSyncing = false;

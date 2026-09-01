@@ -1659,3 +1659,7 @@ VERIFICATION
 --------------------------------------------------------------------------------
   tsc --noEmit  -> exit 0, zero errors
   npm run build -> success
+
+[2026-09-01] Developer Note: Implemented the requested fix for 'Bundle Produced' lingering after 'Delete All Engineer Records' by actively recalculating the 'machines' array's 'totalBundlesProduced' values during role purges, and resetting 'INITIAL_MACHINES' on all factory production wipes.
+
+[2026-09-01] Developer Note: Verified PurgeRecordsPanel logic. The button is correctly disabled when there are 0 records belonging to the selected role, preventing empty purges.

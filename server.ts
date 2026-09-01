@@ -748,31 +748,54 @@ app.post('/api/purge-by-role', async (req: Request, res: Response) => {
       }
     };
 
-    if (who.length) {
-      await run('sales', () => db.delete(salesRecords).where(inArray(salesRecords.staffName, who)).returning());
-      await run('production', () => db.delete(productionBatches).where(inArray(productionBatches.operatorName, who)).returning());
-      await run('expenses', () => db.delete(expenses).where(inArray(expenses.recordedBy, who)).returning());
-      await run('fuel', () => db.delete(fuelLogs).where(inArray(fuelLogs.driverName, who)).returning());
-    }
-    if (ids.length) {
-      await run('attendance', () => db.delete(attendance).where(inArray(attendance.employeeId, ids)).returning());
-    }
-    if (who.length) {
-      await run('attendanceByName', () => db.delete(attendance).where(inArray(attendance.name, who)).returning());
-      await run('repairs', () =>
-        db.delete(repairs).where(or(inArray(repairs.reportedBy, who), inArray(repairs.technicianName, who))).returning()
-      );
-    }
-    if (ids.length) {
-      await run('outerBuyings', () =>
-        db.delete(outerBuyings).where(or(inArray(outerBuyings.engineerId, ids), inArray(outerBuyings.engineerName, who.length ? who : ['__none__']))).returning()
-      );
-      await run('rollBuyings', () =>
-        db.delete(rollBuyings).where(or(inArray(rollBuyings.engineerId, ids), inArray(rollBuyings.engineerName, who.length ? who : ['__none__']))).returning()
-      );
-      await run('equipmentLogs', () =>
-        db.delete(equipmentLogs).where(or(inArray(equipmentLogs.operatorId, ids), inArray(equipmentLogs.operatorName, who.length ? who : ['__none__']))).returning()
-      );
+    const scope = req.body?.scope;
+
+    if (scope === 'production_engineer') {
+      // Complete production engineer reset on the server
+      await run('production', () => db.delete(productionBatches).returning());
+      await run('outerBuyings', () => db.delete(outerBuyings).returning());
+      await run('rollBuyings', () => db.delete(rollBuyings).returning());
+      await run('packagingRolls', () => db.delete(packagingRolls).returning());
+      if (who.length) {
+        await run('repairs', () =>
+          db.delete(repairs).where(or(inArray(repairs.reportedBy, who), inArray(repairs.technicianName, who))).returning()
+        );
+        await run('fuel', () => db.delete(fuelLogs).where(inArray(fuelLogs.driverName, who)).returning());
+        await run('equipmentLogs', () =>
+          db.delete(equipmentLogs).where(or(inArray(equipmentLogs.operatorName, who), inArray(equipmentLogs.operatorId, ids.length ? ids : ['__none__']))).returning()
+        );
+        await run('attendanceByName', () => db.delete(attendance).where(inArray(attendance.name, who)).returning());
+      }
+      if (ids.length) {
+        await run('attendance', () => db.delete(attendance).where(inArray(attendance.employeeId, ids)).returning());
+      }
+    } else {
+      if (who.length) {
+        await run('sales', () => db.delete(salesRecords).where(inArray(salesRecords.staffName, who)).returning());
+        await run('production', () => db.delete(productionBatches).where(inArray(productionBatches.operatorName, who)).returning());
+        await run('expenses', () => db.delete(expenses).where(inArray(expenses.recordedBy, who)).returning());
+        await run('fuel', () => db.delete(fuelLogs).where(inArray(fuelLogs.driverName, who)).returning());
+      }
+      if (ids.length) {
+        await run('attendance', () => db.delete(attendance).where(inArray(attendance.employeeId, ids)).returning());
+      }
+      if (who.length) {
+        await run('attendanceByName', () => db.delete(attendance).where(inArray(attendance.name, who)).returning());
+        await run('repairs', () =>
+          db.delete(repairs).where(or(inArray(repairs.reportedBy, who), inArray(repairs.technicianName, who))).returning()
+        );
+      }
+      if (ids.length) {
+        await run('outerBuyings', () =>
+          db.delete(outerBuyings).where(or(inArray(outerBuyings.engineerId, ids), inArray(outerBuyings.engineerName, who.length ? who : ['__none__']))).returning()
+        );
+        await run('rollBuyings', () =>
+          db.delete(rollBuyings).where(or(inArray(rollBuyings.engineerId, ids), inArray(rollBuyings.engineerName, who.length ? who : ['__none__']))).returning()
+        );
+        await run('equipmentLogs', () =>
+          db.delete(equipmentLogs).where(or(inArray(equipmentLogs.operatorId, ids), inArray(equipmentLogs.operatorName, who.length ? who : ['__none__']))).returning()
+        );
+      }
     }
 
     broadcastDbChange('purge_by_role', 'delete', { employeeIds: ids, names: who, deleted });

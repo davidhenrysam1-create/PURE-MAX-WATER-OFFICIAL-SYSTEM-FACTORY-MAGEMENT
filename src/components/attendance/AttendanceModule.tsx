@@ -821,7 +821,7 @@ export const AttendanceModule: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  disabled={!resetPassword}
+                  disabled={attendance.length === 0}
                   onClick={() => {
                     const ok = resetAttendance(resetPassword);
                     if (ok) {
@@ -830,13 +830,13 @@ export const AttendanceModule: React.FC = () => {
                     }
                   }}
                   className={`px-4 py-2.5 rounded-xl font-bold text-xs text-white transition flex items-center gap-1.5 ${
-                    resetPassword
+                    attendance.length > 0
                       ? 'bg-rose-600 hover:bg-rose-700 cursor-pointer'
-                      : 'bg-rose-300 dark:bg-rose-900 cursor-not-allowed'
+                      : 'bg-rose-300 dark:bg-rose-900 cursor-not-allowed opacity-80'
                   }`}
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  Reset {attendance.length} Records
+                  {attendance.length === 0 ? 'No Records to Reset' : `Reset ${attendance.length} Records`}
                 </button>
               </div>
             </div>

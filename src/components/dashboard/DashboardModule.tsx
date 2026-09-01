@@ -60,6 +60,7 @@ export const DashboardModule: React.FC = () => {
     repairs,
     fuel,
     users,
+    machines,
     announcements,
     systemHealth,
     approveAttendance,
@@ -1878,7 +1879,7 @@ export const DashboardModule: React.FC = () => {
                 Cancel
               </button>
               <button
-                disabled={materialResetPassword.length < 4}
+                disabled={outerBuyings.length === 0 && rollBuyings.length === 0}
                 onClick={() => {
                   const success = resetMaterialBuyings(materialResetPassword);
                   if (success) {
@@ -1888,7 +1889,7 @@ export const DashboardModule: React.FC = () => {
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
               >
-                Wipe KG & Outer Logs
+                {(outerBuyings.length === 0 && rollBuyings.length === 0) ? 'No Records to Reset' : 'Wipe KG & Outer Logs'}
               </button>
             </div>
           </div>
@@ -1952,7 +1953,13 @@ export const DashboardModule: React.FC = () => {
                 Cancel
               </button>
               <button
-                disabled={productionResetPassword.length < 4}
+                disabled={
+                  production.length === 0 && 
+                  outerBuyings.length === 0 && 
+                  rollBuyings.length === 0 && 
+                  packagingRolls.length === 0 &&
+                  machines.every(m => (m.activeRollKg || 0) === 0 && (m.totalBundlesProduced || 0) === 0 && (m.activeRollBundlesProduced || 0) === 0 && !m.assignedOperatorName && m.activeRollName === 'No Roll Loaded')
+                }
                 onClick={() => {
                   const success = resetProductionRecords(productionResetPassword);
                   if (success) {
@@ -1962,7 +1969,7 @@ export const DashboardModule: React.FC = () => {
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
               >
-                Reset Production &amp; Roll Records
+                {(production.length === 0 && outerBuyings.length === 0 && rollBuyings.length === 0 && packagingRolls.length === 0 && machines.every(m => (m.activeRollKg || 0) === 0 && (m.totalBundlesProduced || 0) === 0 && (m.activeRollBundlesProduced || 0) === 0 && !m.assignedOperatorName && m.activeRollName === 'No Roll Loaded')) ? 'No Records to Reset' : 'Reset Production & Roll Records'}
               </button>
             </div>
           </div>
@@ -2023,7 +2030,7 @@ export const DashboardModule: React.FC = () => {
                 Cancel
               </button>
               <button
-                disabled={repairsFuelResetPassword.length < 4}
+                disabled={repairs.length === 0 && fuel.length === 0}
                 onClick={() => {
                   const success = resetRepairsAndFuel(repairsFuelResetPassword);
                   if (success) {
@@ -2033,7 +2040,7 @@ export const DashboardModule: React.FC = () => {
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
               >
-                Reset Repairs &amp; Fuel
+                {(repairs.length === 0 && fuel.length === 0) ? 'No Records to Reset' : 'Reset Repairs & Fuel'}
               </button>
             </div>
           </div>
@@ -2103,7 +2110,7 @@ export const DashboardModule: React.FC = () => {
                 Cancel
               </button>
               <button
-                disabled={freshStartPassword.length < 4}
+                disabled={false}
                 onClick={() => {
                   const success = resetToFreshDatabase(freshStartPassword);
                   if (success) {
