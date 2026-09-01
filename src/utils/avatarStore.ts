@@ -74,14 +74,10 @@ export async function cacheAvatar(employeeId: string, dataUrl: string): Promise<
   // Session tier: synchronous and cannot fail.
   sessionAvatarCache.set(employeeId, dataUrl);
 
-  try {
-    await idbStorage.saveMediaItem(mirrorKey(employeeId), dataUrl);
-  } catch (err) {
-    console.warn('Avatar IndexedDB write failed:', err);
-  }
-
-  // Small avatars (compressed to ~500px webp) fit comfortably; only skip the
-  // mirror when it is clearly too large for localStorage.
+  // localStorage mirror FIRST and synchronously. It is the tier the sync read
+  // path uses, so it must be in place before we await anything - otherwise a
+  // slow or failing IndexedDB write leaves a window where the picture is gone.
+  // Avatars are ~320px webp (~10-20 KB), comfortably inside the budget.
   try {
     if (dataUrl.length < 512 * 1024) {
       localStorage.setItem(mirrorKey(employeeId), dataUrl);
@@ -90,6 +86,13 @@ export async function cacheAvatar(employeeId: string, dataUrl: string): Promise<
     }
   } catch (err) {
     console.warn('Avatar localStorage mirror failed (non-fatal):', err);
+  }
+
+  // IndexedDB is the unbounded durable tier; best-effort.
+  try {
+    await idbStorage.saveMediaItem(mirrorKey(employeeId), dataUrl);
+  } catch (err) {
+    console.warn('Avatar IndexedDB write failed:', err);
   }
 }
 

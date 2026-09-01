@@ -228,6 +228,55 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
  * the one carrying the most information, so a check-out or an approval is
  * never lost by the merge.
  */
+/**
+ * Reconcile a local collection against a fresh server fetch.
+ *
+ * THE BUG THIS FIXES
+ * ------------------
+ * Every merge in refreshCloudData() used to be seeded from `prevLocal`:
+ *
+ *     const map = new Map();
+ *     serverRows.forEach(r => map.set(r.id, r));
+ *     prevLocal.forEach(r => map.set(r.id, r));   // <-- local re-added last
+ *     return [...map.values()];
+ *
+ * Local rows were applied AFTER the server rows, so a record that no longer
+ * existed on the server (deleted via SQL terminal, an API delete, or another
+ * device) was simply re-added from stale local memory and resurrected. This ran
+ * on every load, every reconnect, and every `db:data_changed` broadcast from
+ * any connected client - which is why deletions appeared to work offline and
+ * always came back online. refreshCloudData() early-returns when
+ * !navigator.onLine, so offline nothing ever overwrote the local deletion.
+ *
+ * THE FIX
+ * -------
+ * The server response is authoritative. Local rows are kept ONLY when they are
+ * genuinely unsynced offline work: absent from the server response AND created
+ * very recently (or explicitly flagged isOfflinePending). Anything older that
+ * the server does not have was deleted, and stays deleted.
+ */
+const UNSYNCED_GRACE_MS = 10 * 60 * 1000; // 10 minutes
+
+const reconcileFromServer = <T extends Record<string, any>>(
+  prevLocal: T[] | undefined,
+  serverRows: T[],
+  keyOf: (r: T) => string | number
+): T[] => {
+  const serverKeys = new Set<ReturnType<typeof keyOf>>();
+  serverRows.forEach((r) => serverKeys.add(keyOf(r)));
+
+  const freshCutoff = Date.now() - UNSYNCED_GRACE_MS;
+  const stillPending = (prevLocal || []).filter((r) => {
+    if (!r) return false;
+    if (serverKeys.has(keyOf(r))) return false; // server already has it
+    if ((r as any).isOfflinePending === true) return true;
+    const created = Date.parse((r as any)?.createdAt || '');
+    return !isNaN(created) && created >= freshCutoff;
+  });
+
+  return [...serverRows, ...stillPending];
+};
+
 const attendanceKey = (r: { userId?: string; employeeId?: string; date?: string }): string => {
   const who = (r.userId || r.employeeId || '').toString().trim().toLowerCase();
   const when = (r.date || '').toString().trim();
@@ -1258,19 +1307,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             password: u.password,
             createdBy: 'System/DB',
           }));
+          // Server decides WHO exists, so an account deleted in the database
+          // actually disappears instead of being re-added from stale memory.
+          // Avatars are still preserved via mergeUserPreservingAvatar() so a
+          // NULL server avatar never wipes a locally uploaded picture (#10).
           setUsers((prevLocal) => {
-            const map = new Map<string, User>();
-            prevLocal.forEach((u: User) => map.set(u.employeeId || u.id, u));
-            mapped.forEach((u: User) => {
+            const reconciled = reconcileFromServer<User>(
+              prevLocal,
+              mapped,
+              (u) => u.employeeId || u.id
+            );
+            const byKey = new Map<string, User>();
+            reconciled.forEach((u: User) => {
               const key = u.employeeId || u.id;
-              const existing = map.get(key);
-              // ISSUE #10: the plain spread `{ ...existing, ...u }` let a null
-              // avatarUrl from the server wipe a locally uploaded picture on
-              // every background sync. mergeUserPreservingAvatar() keeps the
-              // locally cached image when the server has none.
-              map.set(key, existing ? mergeUserPreservingAvatar(existing, u) : u);
+              const existing = byKey.get(key);
+              byKey.set(
+                key,
+                existing && existing !== u ? mergeUserPreservingAvatar(existing, u) : u
+              );
             });
-            return Array.from(map.values());
+            return Array.from(byKey.values());
           });
         }
       }
@@ -1300,9 +1356,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             (r) => r.date
           );
           setAttendance((prevLocal) =>
-            // Keyed on (user, date), NOT id - a local `att-<epoch>` row and
-            // the server's numeric row are the same shift and must collapse.
-            dedupeAttendance([...(prevLocal || []), ...surviving])
+            // Server wins; only genuinely unsynced local rows survive.
+            // Then collapse on (user, date) because a local `att-<epoch>` row
+            // and the server's `att-<serial>` row are the same shift.
+            dedupeAttendance(
+              reconcileFromServer<AttendanceRecord>(prevLocal, surviving, (r) => r.id)
+            )
           );
         }
       }
@@ -1311,12 +1370,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgSales = await salesRes.value.json();
         if (Array.isArray(pgSales)) {
           const surviving = dropResurrected(pgSales, 'sales', (r) => [r.staffName], (r) => r.date);
-          setSales((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((s: any) => map.set(s.id, s));
-            prevLocal.forEach((s: any) => map.set(s.id, s));
-            return Array.from(map.values());
-          });
+          setSales((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1329,12 +1383,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             (r: any) => [r.operatorName, r.operatorId, r.engineerId],
             (r: any) => r.date
           );
-          setProduction((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((p: any) => map.set(p.id, p));
-            prevLocal.forEach((p: any) => map.set(p.id, p));
-            return Array.from(map.values());
-          });
+          setProduction((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1342,12 +1391,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgOutBuy = await outBuyRes.value.json();
         if (Array.isArray(pgOutBuy)) {
           const surviving = dropResurrected(pgOutBuy, 'outerBuyings', (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
-          setOuterBuyings((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((o: any) => map.set(o.id, o));
-            prevLocal.forEach((o: any) => map.set(o.id, o));
-            return Array.from(map.values());
-          });
+          setOuterBuyings((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1355,12 +1399,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgRollBuy = await rollBuyRes.value.json();
         if (Array.isArray(pgRollBuy)) {
           const surviving = dropResurrected(pgRollBuy, 'rollBuyings', (r: any) => [r.engineerId, r.engineerName], (r: any) => r.date);
-          setRollBuyings((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((r: any) => map.set(r.id, r));
-            prevLocal.forEach((r: any) => map.set(r.id, r));
-            return Array.from(map.values());
-          });
+          setRollBuyings((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1373,12 +1412,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             (r: any) => [r.operatorId, r.operatorName],
             (r: any) => r.purchaseDate || r.loadedAt
           );
-          setPackagingRolls((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((r: any) => map.set(r.rollCode || r.id, r));
-            prevLocal.forEach((r: any) => map.set(r.rollCode || r.id, r));
-            return Array.from(map.values());
-          });
+          setPackagingRolls((prevLocal) =>
+            reconcileFromServer(prevLocal, surviving, (r: any) => r.rollCode || r.id)
+          );
         }
       }
 
@@ -1386,12 +1422,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgExp = await expRes.value.json();
         if (Array.isArray(pgExp)) {
           const surviving = dropResurrected(pgExp, 'expenses', (r: any) => [r.recordedBy, r.recordedById], (r: any) => r.date);
-          setExpenses((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((e: any) => map.set(e.id, e));
-            prevLocal.forEach((e: any) => map.set(e.id, e));
-            return Array.from(map.values());
-          });
+          setExpenses((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1399,12 +1430,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgRep = await repRes.value.json();
         if (Array.isArray(pgRep)) {
           const surviving = dropResurrected(pgRep, 'repairs', (r: any) => [r.reportedBy, r.technicianName, r.engineerId], (r: any) => r.dateReported || r.date);
-          setRepairs((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((r: any) => map.set(r.id, r));
-            prevLocal.forEach((r: any) => map.set(r.id, r));
-            return Array.from(map.values());
-          });
+          setRepairs((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1412,12 +1438,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgFuel = await fuelRes.value.json();
         if (Array.isArray(pgFuel)) {
           const surviving = dropResurrected(pgFuel, 'fuel', (r: any) => [r.driverName, r.engineerId], (r: any) => r.date);
-          setFuel((prevLocal) => {
-            const map = new Map();
-            surviving.forEach((f: any) => map.set(f.id, f));
-            prevLocal.forEach((f: any) => map.set(f.id, f));
-            return Array.from(map.values());
-          });
+          setFuel((prevLocal) => reconcileFromServer(prevLocal, surviving, (r: any) => r.id));
         }
       }
 
@@ -1425,12 +1446,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const pgEq = await eqRes.value.json();
         if (Array.isArray(pgEq)) {
           const survivingEq = dropResurrected(pgEq, 'equipmentLogs', (r: any) => [r.operatorId, r.operatorName], (r: any) => r.date);
-          setEquipmentLogs((prevLocal) => {
-            const map = new Map();
-            survivingEq.forEach((e: any) => map.set(e.id, e));
-            prevLocal.forEach((e: any) => map.set(e.id, e));
-            return Array.from(map.values());
-          });
+          setEquipmentLogs((prevLocal) => reconcileFromServer(prevLocal, survivingEq, (r: any) => r.id));
         }
       }
 
@@ -1449,24 +1465,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               type: inferredType,
             };
           });
-          setMessages((prevLocal) => {
-            const map = new Map();
-            mappedMsg.forEach((m: any) => map.set(m.id, m));
-            prevLocal.forEach((m: any) => map.set(m.id, m));
-            return Array.from(map.values());
-          });
+          setMessages((prevLocal) => reconcileFromServer(prevLocal, mappedMsg, (r: any) => r.id));
         }
       }
 
       if (annRes.status === 'fulfilled' && annRes.value.ok) {
         const pgAnn = await annRes.value.json();
         if (Array.isArray(pgAnn)) {
-          setAnnouncements((prevLocal) => {
-            const map = new Map();
-            pgAnn.forEach((a: any) => map.set(a.id, a));
-            prevLocal.forEach((a: any) => map.set(a.id, a));
-            return Array.from(map.values());
-          });
+          setAnnouncements((prevLocal) => reconcileFromServer(prevLocal, pgAnn, (r: any) => r.id));
         }
       }
 

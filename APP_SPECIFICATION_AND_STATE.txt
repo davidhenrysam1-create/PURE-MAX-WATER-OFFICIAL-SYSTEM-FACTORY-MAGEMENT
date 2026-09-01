@@ -1576,3 +1576,86 @@ VERIFICATION
   tsc --noEmit  -> exit 0, zero errors
   npm run build -> success
 ================================================================================
+
+================================================================================
+SESSION — Systemic resurrection bug: client merge never trusted the server
+================================================================================
+Owner report:
+  "when ever i delete all records made by both production engineer and
+   production officer from the data base it only works when i am offline and if
+   device is connected to an internet all records which have been deleted we
+   restore even the attendance"
+
+--------------------------------------------------------------------------------
+ROOT CAUSE (the real one, beneath the earlier symptoms)
+--------------------------------------------------------------------------------
+Every one of the 14 merge sites in refreshCloudData() was written as:
+
+    const map = new Map();
+    serverRows.forEach(r => map.set(r.id, r));
+    prevLocal.forEach(r => map.set(r.id, r));   // local applied LAST
+    return [...map.values()];
+
+Local rows were merged in AFTER the server rows, so a record that no longer
+existed on the server was simply re-added from stale in-memory state and
+resurrected. It could never be pruned.
+
+This ran on every page load, every reconnect, and every `db:data_changed`
+socket broadcast triggered by ANY connected client's save — so deletions
+appeared to hold offline (refreshCloudData() early-returns when
+!navigator.onLine) and were undone the moment the device came back online.
+
+This is why the earlier per-feature fixes (server delete endpoints, tombstones)
+only helped partially: they were treating symptoms of a single systemic defect.
+
+--------------------------------------------------------------------------------
+FIX — reconcileFromServer()
+--------------------------------------------------------------------------------
+New module-level helper in AppContext:
+
+    reconcileFromServer(prevLocal, serverRows, keyOf)
+
+The server response is authoritative. Local rows are kept ONLY when they are
+genuinely unsynced offline work — absent from the server response AND either
+flagged isOfflinePending or created within the last 10 minutes
+(UNSYNCED_GRACE_MS). Anything older that the server does not have was deleted,
+and stays deleted.
+
+Replaced all 14 merge sites:
+  users, attendance, sales, production, outerBuyings, rollBuyings,
+  packagingRolls, expenses, repairs, fuel, equipmentLogs, messages,
+  announcements
+
+users is a special case: the server decides WHO exists (so a deleted account
+actually disappears) but mergeUserPreservingAvatar() is still applied so a NULL
+server avatar never wipes a locally uploaded picture (Issue #10).
+
+BONUS BUG FOUND IN THE SAME AREA
+  packagingRolls had `if (Array.isArray(x) && x.length > 0)`, so an empty-but-
+  correct server response was discarded entirely — deleting every roll could
+  never stick. Guard removed.
+
+The earlier tombstone layers (employee + collection) are retained as a second
+line of defence, so a reset still holds when the backend is unreachable.
+
+--------------------------------------------------------------------------------
+PROFILE PICTURE (additional hardening)
+--------------------------------------------------------------------------------
+cacheAvatar() wrote the localStorage mirror only AFTER awaiting the IndexedDB
+write, leaving a window where the sync read path (which prefers the mirror)
+found nothing if IDB was slow or blocked. The mirror is now written first and
+synchronously; IndexedDB remains the unbounded durable tier, best-effort.
+
+--------------------------------------------------------------------------------
+NOTE ON THE PRIOR SESSION'S REPORT
+--------------------------------------------------------------------------------
+A previous session reported making this fix and left it uncommitted. That work
+was NOT present in this repository (verified: no reconcileFromServer symbol,
+repo clean at 1cf8fc7). The fix above was therefore implemented from scratch
+here. Do not assume an uncommitted fix from another environment exists.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+  tsc --noEmit  -> exit 0, zero errors
+  npm run build -> success
