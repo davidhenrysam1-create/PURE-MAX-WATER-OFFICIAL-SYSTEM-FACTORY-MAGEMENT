@@ -883,6 +883,39 @@ app.post('/api/repairs-fuel-reset', async (req: Request, res: Response) => {
   }
 });
 
+/** Full Factory Expenses reset, server side. */
+app.post('/api/expenses-reset', async (req: Request, res: Response) => {
+  try {
+    const out: Record<string, number> = {};
+    const wipe = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        out[label] = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+      } catch (err) {
+        console.warn(`expenses-reset: ${label} failed`, err);
+        out[label] = 0;
+      }
+    };
+    await wipe('expenses', () => db.delete(expenses).returning());
+
+    broadcastDbChange('expenses_reset', 'delete', out);
+    res.json({ success: true, deleted: out });
+  } catch (err) {
+    console.error('Error resetting expenses:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+app.post('/api/expenses-reset-archive', (req: Request, res: Response) => {
+  try {
+    const archive = req.body;
+    console.log(`[ARCHIVE] Factory expenses reset by ${archive?.resetBy?.name || 'Unknown'}: ${archive?.counts?.expenses ?? 0} expenses`);
+    res.json({ success: true, message: 'Archive captured' });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 /** Fresh start endpoint: wipes every transaction and log table in the database. */
 app.post('/api/fresh-start', async (req: Request, res: Response) => {
   try {

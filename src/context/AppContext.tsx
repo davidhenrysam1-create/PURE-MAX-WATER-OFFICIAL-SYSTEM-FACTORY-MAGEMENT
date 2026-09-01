@@ -151,6 +151,7 @@ interface AppContextType {
   resetMaterialBuyings: (password: string) => boolean;
   resetProductionRecords: (password: string) => boolean;
   resetRepairsAndFuel: (password: string) => boolean;
+  resetExpensesRecords: (password: string) => boolean;
   overrideSalary: (userId: string, newMonthlyLe: number, reason: string) => void;
 
   // Sales
@@ -2979,6 +2980,107 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
     return true;
   };
+
+  /**
+   * Wipe every Factory Operating Expense record (Manager / Developer / CEO, password gated).
+   * Same archive-first ordering, Excel workbook generation, and server hard delete.
+   */
+  const resetExpensesRecords = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to reset factory expenses.', 'error', 'Not Authorised');
+      return false;
+    }
+    const canReset =
+      canPurgeRecords(actor.role as UserRole) ||
+      ['manager', 'second_manager', 'ceo', 'developer'].includes(actor.role) ||
+      inspectingOriginalUser?.role === 'developer';
+    if (!canReset) {
+      showToast('Only a Manager, Developer, or CEO may reset factory expenses.', 'error', 'Access Denied');
+      return false;
+    }
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Factory expenses were NOT reset.', 'error', 'Verification Failed');
+      logAudit('EXPENSES_RESET_DENIED', `${actor.name} entered a wrong reset password`);
+      return false;
+    }
+
+    const snapshot = expenses;
+    if (snapshot.length === 0) {
+      showToast('There are no expense records to reset.', 'info', 'Nothing To Reset');
+      return true;
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const archive = {
+      kind: 'EXPENSES_RESET',
+      createdAt: new Date().toISOString(),
+      resetBy: { name: actor.name, employeeId: actor.employeeId, role: actor.role },
+      recordCount: snapshot.length,
+      records: snapshot,
+    };
+
+    // 1. durable local archive
+    try {
+      localStorage.setItem(`puremax_expenses_reset_${stamp}`, JSON.stringify(archive));
+    } catch {
+      /* quota */
+    }
+    idbStorage.saveMediaItem(`expenses-reset-${stamp}`, JSON.stringify(archive)).catch(() => {});
+
+    // 2. Excel workbook backup
+    try {
+      const rows = snapshot.map((r) => ({
+        'Receipt Ref': r.receiptNumber || '',
+        Date: r.date,
+        Category: r.category,
+        'Item Description': r.itemDescription,
+        'Amount (SL Le)': r.amountLe,
+        Vendor: r.vendor || '',
+        'Logged By': r.recordedByName,
+      }));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ '(no records)': '' }]);
+      XLSX.utils.book_append_sheet(wb, ws, 'Expenses');
+      XLSX.writeFile(wb, `Factory_Expenses_Reset_Backup_${stamp}.xlsx`);
+    } catch (err) {
+      console.warn('Expenses reset Excel export failed:', err);
+    }
+
+    // 3. backup archive to server
+    fetch('/api/expenses-reset-archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(archive),
+    }).catch(() => {});
+
+    // 3b. Server hard delete
+    fetch('/api/expenses-reset', { method: 'POST' }).catch(() => {});
+
+    // 4. clear sync queue, tombstones, and live state
+    syncEngine.clearQueue(['expense_create']);
+    tombstoneCollections(['expenses']);
+    setExpenses([]);
+    try {
+      localStorage.setItem('puremax_expenses_v3', JSON.stringify([]));
+    } catch {}
+
+    logAudit(
+      'EXPENSES_RESET',
+      `${actor.name} (${actor.employeeId}) reset ALL ${snapshot.length} factory expense records after password verification`,
+      actor
+    );
+    showToast(
+      `Factory expenses reset. ${snapshot.length} expense records cleared.`,
+      'success',
+      'Expenses Reset Complete'
+    );
+    return true;
+  };
   const resetAttendance = (password: string): boolean => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
@@ -4066,6 +4168,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         resetMaterialBuyings,
         resetProductionRecords,
         resetRepairsAndFuel,
+        resetExpensesRecords,
         overrideSalary,
         addSalesRecord,
         addProductionRecord,
