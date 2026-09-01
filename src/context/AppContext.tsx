@@ -963,6 +963,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     scope: PurgeScope,
     password: string
   ): { success: boolean; error?: string; archiveId?: string; removed?: number } => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return { success: false, error: 'Internet Connection Required to Execute Factory Record Reset.' };
+    }
     const actor = currentUser;
     const meta = PURGE_SCOPE_META[scope];
 
@@ -2538,6 +2542,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    */
 
   const resetMaterialBuyings = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
     const actor = currentUser;
     if (!actor) {
       showToast('You must be signed in to reset material logs.', 'error', 'Not Authorised');
@@ -2601,6 +2609,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * the backup has been written.
    */
   const resetProductionRecords = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
     const actor = currentUser;
     if (!actor) {
       showToast('You must be signed in to reset production records.', 'error', 'Not Authorised');
@@ -2709,6 +2721,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * reset so the wipe survives a reconnect.
    */
   const resetRepairsAndFuel = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
     const actor = currentUser;
     if (!actor) {
       showToast('You must be signed in to reset repairs & fuel.', 'error', 'Not Authorised');
@@ -2790,6 +2806,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return true;
   };
   const resetAttendance = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
     const actor = currentUser;
     if (!actor) {
       showToast('You must be signed in to reset attendance.', 'error', 'Not Authorised');
@@ -3678,24 +3698,88 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setStaffLiveLocations((prev) => prev.filter((p) => p.userId !== userId));
   }, []);
 
-  const resetToFreshDatabase = () => {
-    localStorage.removeItem('puremax_attendance_v3');
-    localStorage.removeItem('puremax_sales_v3');
-    localStorage.removeItem('puremax_production_v3');
-    localStorage.removeItem('puremax_outer_buyings_v3');
-    localStorage.removeItem('puremax_roll_buyings_v3');
-    localStorage.removeItem('puremax_expenses_v3');
-    localStorage.removeItem('puremax_repairs_v3');
-    localStorage.removeItem('puremax_fuel_v3');
-    localStorage.removeItem('puremax_equipment_logs_v3');
-    localStorage.removeItem('puremax_messages_v3');
-    localStorage.removeItem('puremax_announcements_v3');
-    localStorage.removeItem('puremax_audit_logs');
+  const resetToFreshDatabase = (password: string): boolean => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('Internet Connection Required to Execute Factory Record Reset.', 'error', 'Network Offline');
+      return false;
+    }
+    const actor = currentUser;
+    if (!actor) {
+      showToast('You must be signed in to perform a fresh start.', 'error', 'Not Authorised');
+      return false;
+    }
+    if (!canPurgeRecords(actor.role as UserRole)) {
+      showToast('Only a Manager or Developer may perform a fresh start.', 'error', 'Access Denied');
+      return false;
+    }
+    if (!verifyPrivilegedPassword(actor, password)) {
+      showToast('Incorrect password. Fresh start was NOT executed.', 'error', 'Verification Failed');
+      logAudit('FRESH_START_DENIED', `${actor.name} entered a wrong password`);
+      return false;
+    }
+
+    // 1. Database server-side wipe (best effort)
+    fetch('/api/fresh-start', { method: 'POST' }).catch(() => {});
+
+    // 2. Collection tombstones so background sync / reconnect never resurrects cleared records
+    tombstoneCollections([
+      'attendance',
+      'sales',
+      'production',
+      'outerBuyings',
+      'rollBuyings',
+      'packagingRolls',
+      'expenses',
+      'repairs',
+      'fuel',
+      'equipmentLogs',
+      'messages',
+      'announcements',
+      'notifications',
+    ]);
+
+    // 3. Clear localStorage record mirrors and tombstones
+    const keysToRemove = [
+      'puremax_attendance_v3',
+      'puremax_sales_v3',
+      'puremax_production_v3',
+      'puremax_outer_buyings_v3',
+      'puremax_roll_buyings_v3',
+      'puremax_packaging_rolls_v3',
+      'puremax_machines_v6',
+      'puremax_expenses_v3',
+      'puremax_repairs_v3',
+      'puremax_fuel_v3',
+      'puremax_equipment_logs_v3',
+      'puremax_messages_v3',
+      'puremax_announcements_v3',
+      'puremax_notifications_v3',
+      'puremax_audit_logs',
+      'puremax_reset_tombstones_v1',
+      'puremax_purge_tombstones_v1',
+    ];
+    keysToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* ignore */
+      }
+    });
+
+    // 4. Clear all React live states & daily window offset
+    setDailyResetAtMs(0);
+    try {
+      localStorage.removeItem('puremax_daily_reset_at');
+    } catch {
+      /* ignore */
+    }
     setAttendance([]);
     setSales([]);
     setProduction([]);
     setOuterBuyings([]);
     setRollBuyings([]);
+    setPackagingRolls([]);
+    setMachines(INITIAL_MACHINES);
     setExpenses([]);
     setRepairs([]);
     setFuel([]);
@@ -3703,17 +3787,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setMessages([]);
     setAnnouncements([]);
     setNotifications([]);
+
+    logAudit(
+      'SYSTEM_FRESH_START',
+      `${actor.name} (${actor.employeeId}) executed a complete SYSTEM FRESH START (emptied all database tables and local storage records)`,
+      actor
+    );
+
     setAuditLogs([
       {
         id: `aud-${Date.now()}`,
-        actorId: currentUser?.id || 'u-dev-1',
-        actorName: currentUser?.name || 'System Admin',
-        actorRole: currentUser?.role || 'developer',
+        actorId: actor.id,
+        actorName: actor.name,
+        actorRole: actor.role,
         action: 'SYSTEM_FRESH_START',
-        details: 'All records cleared. System reset to clean operational state.',
+        details: 'All records emptied in database and local storage. System reset to clean operational state.',
         timestamp: new Date().toISOString(),
       },
     ]);
+
+    showToast('All records emptied in database and local storage for a fresh start.', 'success', 'Fresh Start Complete');
+    return true;
   };
 
   return (

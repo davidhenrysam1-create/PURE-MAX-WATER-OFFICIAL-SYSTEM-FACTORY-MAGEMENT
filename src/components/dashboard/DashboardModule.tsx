@@ -76,6 +76,7 @@ export const DashboardModule: React.FC = () => {
     resetMaterialBuyings,
     resetProductionRecords,
     resetRepairsAndFuel,
+    resetToFreshDatabase,
     packagingRolls,
   } = useApp();
 
@@ -90,6 +91,8 @@ export const DashboardModule: React.FC = () => {
   const [productionResetPassword, setProductionResetPassword] = useState('');
   const [showRepairsFuelResetConfirm, setShowRepairsFuelResetConfirm] = useState(false);
   const [repairsFuelResetPassword, setRepairsFuelResetPassword] = useState('');
+  const [showFreshStartConfirm, setShowFreshStartConfirm] = useState(false);
+  const [freshStartPassword, setFreshStartPassword] = useState('');
 
   // Daily Developer Branding State
   const loginFileRef = useRef<HTMLInputElement>(null);
@@ -1304,6 +1307,19 @@ export const DashboardModule: React.FC = () => {
                       <span>Reset Repairs &amp; Fuel</span>
                     </button>
                   )}
+                  {canResetDaily && (
+                    <button
+                      onClick={() => {
+                        setFreshStartPassword('');
+                        setShowFreshStartConfirm(true);
+                      }}
+                      className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white font-black rounded-xl text-xs flex items-center gap-1.5 shadow-lg shadow-rose-900/40 transition cursor-pointer"
+                      title="Empty ALL records in database and local storage for a clean fresh start (password required)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Fresh Start (Empty All)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2018,6 +2034,86 @@ export const DashboardModule: React.FC = () => {
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer"
               >
                 Reset Repairs &amp; Fuel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fresh Start Confirmation Modal */}
+      {showFreshStartConfirm && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
+          onClick={() => setShowFreshStartConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-rose-500 shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 bg-rose-50 dark:bg-rose-950/50 border-b border-rose-200 dark:border-rose-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-rose-900 dark:text-rose-200">
+                    ⚠️ Execute Fresh Start (Empty All Records)?
+                  </h3>
+                  <p className="text-[11px] text-rose-800/80 dark:text-rose-300/80">
+                    This will permanently empty ALL database tables and local storage records.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="p-3 rounded-xl bg-rose-100/70 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200 font-medium">
+                This action is <strong className="underline">irreversible</strong> and will clear:
+                <ul className="list-disc pl-4 mt-1.5 space-y-0.5 font-semibold">
+                  <li>All sales &amp; dispatch records</li>
+                  <li>All production batches &amp; packaging rolls</li>
+                  <li>All material &amp; roll buyings</li>
+                  <li>All attendance, expenses, repairs &amp; fuel logs</li>
+                  <li>All messages, announcements &amp; audit logs</li>
+                </ul>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-800 dark:text-slate-200">
+                  Manager / Developer Password <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={freshStartPassword}
+                  onChange={(e) => setFreshStartPassword(e.target.value)}
+                  placeholder="Enter your password..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-white font-mono focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setShowFreshStartConfirm(false);
+                  setFreshStartPassword('');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={freshStartPassword.length < 4}
+                onClick={() => {
+                  const success = resetToFreshDatabase(freshStartPassword);
+                  if (success) {
+                    setShowFreshStartConfirm(false);
+                    setFreshStartPassword('');
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs transition cursor-pointer shadow-lg shadow-rose-600/30"
+              >
+                Empty All &amp; Fresh Start
               </button>
             </div>
           </div>

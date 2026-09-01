@@ -860,6 +860,42 @@ app.post('/api/repairs-fuel-reset', async (req: Request, res: Response) => {
   }
 });
 
+/** Fresh start endpoint: wipes every transaction and log table in the database. */
+app.post('/api/fresh-start', async (req: Request, res: Response) => {
+  try {
+    const out: Record<string, number> = {};
+    const wipe = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const r = await fn();
+        out[label] = Array.isArray(r) ? r.length : Number((r as any)?.rowCount ?? 0);
+      } catch (err) {
+        console.warn(`fresh-start: ${label} failed`, err);
+        out[label] = 0;
+      }
+    };
+    await wipe('sales', () => db.delete(salesRecords).returning());
+    await wipe('production', () => db.delete(productionBatches).returning());
+    await wipe('outerBuyings', () => db.delete(outerBuyings).returning());
+    await wipe('rollBuyings', () => db.delete(rollBuyings).returning());
+    await wipe('packagingRolls', () => db.delete(packagingRolls).returning());
+    await wipe('expenses', () => db.delete(expenses).returning());
+    await wipe('repairs', () => db.delete(repairs).returning());
+    await wipe('fuel', () => db.delete(fuelLogs).returning());
+    await wipe('equipmentLogs', () => db.delete(equipmentLogs).returning());
+    await wipe('attendance', () => db.delete(attendance).returning());
+    await wipe('messages', () => db.delete(messages).returning());
+    await wipe('announcements', () => db.delete(announcements).returning());
+    await wipe('notifications', () => db.delete(notifications).returning());
+    await wipe('auditLogs', () => db.delete(auditLogs).returning());
+
+    broadcastDbChange('fresh_start', 'delete', out);
+    res.json({ success: true, deleted: out });
+  } catch (err) {
+    console.error('Error executing fresh start wipe:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 app.post('/api/attendance-reset-archive', (req, res) => recordResetArchive('ATTENDANCE', req, res));
 app.post('/api/production-reset-archive', (req, res) => recordResetArchive('PRODUCTION', req, res));
 app.post('/api/repairs-fuel-reset-archive', (req, res) => recordResetArchive('REPAIRS_FUEL', req, res));
