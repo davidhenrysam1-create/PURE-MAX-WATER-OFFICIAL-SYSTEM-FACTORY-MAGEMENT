@@ -1380,6 +1380,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     try {
+      const cb = `?_t=${Date.now()}`;
       const [
         usersRes,
         attRes,
@@ -1396,20 +1397,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         annRes,
         settingsRes,
       ] = await Promise.allSettled([
-        fetch('/api/users'),
-        fetch('/api/attendance'),
-        fetch('/api/sales'),
-        fetch('/api/production'),
-        fetch('/api/outer-buyings'),
-        fetch('/api/roll-buyings'),
-        fetch('/api/packaging-rolls'),
-        fetch('/api/expenses'),
-        fetch('/api/repairs'),
-        fetch('/api/fuel'),
-        fetch('/api/equipment-logs'),
-        fetch('/api/messages'),
-        fetch('/api/announcements'),
-        fetch('/api/settings'),
+        fetch(`/api/users${cb}`),
+        fetch(`/api/attendance${cb}`),
+        fetch(`/api/sales${cb}`),
+        fetch(`/api/production${cb}`),
+        fetch(`/api/outer-buyings${cb}`),
+        fetch(`/api/roll-buyings${cb}`),
+        fetch(`/api/packaging-rolls${cb}`),
+        fetch(`/api/expenses${cb}`),
+        fetch(`/api/repairs${cb}`),
+        fetch(`/api/fuel${cb}`),
+        fetch(`/api/equipment-logs${cb}`),
+        fetch(`/api/messages${cb}`),
+        fetch(`/api/announcements${cb}`),
+        fetch(`/api/settings${cb}`),
       ]);
 
       if (settingsRes.status === 'fulfilled' && settingsRes.value.ok) {
@@ -1441,17 +1442,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }));
           // Server decides WHO exists, so an account deleted in the database
           // actually disappears instead of being re-added from stale memory.
-          // Avatars are still preserved via mergeUserPreservingAvatar() so a
-          // NULL server avatar never wipes a locally uploaded picture (#10).
+          // Avatars are still preserved from local state so a NULL server avatar 
+          // (or a cached old response) never wipes a locally uploaded picture (#10).
           setUsers((prevLocal) => {
             const reconciled = reconcileFromServer<User>(
               prevLocal,
               mapped,
               (u) => u.employeeId || u.id
             );
+            
+            // Deduplicate and preserve local avatar
             const byKey = new Map<string, User>();
             reconciled.forEach((u: User) => {
               const key = u.employeeId || u.id;
+              
+              // If the server didn't send an avatar, see if we had one locally
+              if (!u.avatarUrl && prevLocal) {
+                const localMatch = prevLocal.find(old => (old.employeeId || old.id) === key);
+                if (localMatch && localMatch.avatarUrl) {
+                  u = { ...u, avatarUrl: localMatch.avatarUrl };
+                }
+              }
+
               const existing = byKey.get(key);
               byKey.set(
                 key,
