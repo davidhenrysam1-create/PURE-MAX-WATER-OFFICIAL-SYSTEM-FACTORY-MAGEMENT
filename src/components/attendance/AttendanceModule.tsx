@@ -333,14 +333,14 @@ export const AttendanceModule: React.FC = () => {
             <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
               <span className="text-slate-400 text-[10px] uppercase block">Approved Days Worked</span>
               <span className="text-base font-bold text-emerald-400">
-                {attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved').length} Days
+                {attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved' && a.checkOutStatus === 'approved').length} Days
               </span>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
               <span className="text-slate-400 text-[10px] uppercase block">Earned Salary to Date</span>
               <span className="text-base font-bold text-emerald-400">
-                SL Le {(attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved').length * (currentUser?.dailySalaryLe || 0)).toLocaleString()}
+                SL Le {(attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved' && a.checkOutStatus === 'approved').length * (currentUser?.dailySalaryLe || 0)).toLocaleString()}
               </span>
             </div>
 
@@ -521,14 +521,24 @@ export const AttendanceModule: React.FC = () => {
                       <td className="py-3 px-3">
                         <span
                           className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                            rec.status === 'approved'
+                            rec.status === 'approved' && rec.checkOutStatus === 'approved'
                               ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                              : rec.status === 'pending'
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                              : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                              : rec.status === 'rejected' || rec.checkOutStatus === 'rejected'
+                              ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                              : rec.status === 'approved' && !rec.checkOutTime
+                              ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                              : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                           }`}
                         >
-                          {rec.status}
+                          {rec.status === 'approved' && rec.checkOutStatus === 'approved' 
+                            ? 'APPROVED' 
+                            : rec.status === 'rejected' || rec.checkOutStatus === 'rejected'
+                            ? 'REJECTED'
+                            : rec.status === 'approved' && !rec.checkOutTime
+                            ? 'ACTIVE'
+                            : rec.status === 'approved' && rec.checkOutStatus === 'pending'
+                            ? 'PENDING OUT'
+                            : 'PENDING IN'}
                         </span>
                       </td>
                       {canApprove && (
@@ -596,7 +606,7 @@ export const AttendanceModule: React.FC = () => {
                   {users
                     .filter((u) => canViewAllSalaries || u.id === currentUser?.id || u.employeeId === currentUser?.employeeId)
                     .map((u) => {
-                    const approvedCount = attendance.filter((a) => a.userId === u.id && a.status === 'approved').length;
+                    const approvedCount = attendance.filter((a) => a.userId === u.id && a.status === 'approved' && a.checkOutStatus === 'approved').length;
                     const computedSalary = approvedCount > 0 ? approvedCount * u.dailySalaryLe : u.monthlySalaryLe;
                     return (
                       <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">

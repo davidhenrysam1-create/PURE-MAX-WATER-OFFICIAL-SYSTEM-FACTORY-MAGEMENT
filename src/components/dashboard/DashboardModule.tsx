@@ -969,7 +969,7 @@ export const DashboardModule: React.FC = () => {
               <div>
                 <span className="text-xs text-slate-400 font-medium uppercase tracking-wider text-[10px] font-mono">My Approved Attendance</span>
                 <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
-                  {attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved').length} Days
+                  {attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved' && a.checkOutStatus === 'approved').length} Days
                 </div>
                 <span className="text-[10px] text-emerald-300 font-medium flex items-center gap-1 mt-0.5">
                   <CheckCircle2 className="w-3 h-3 text-emerald-400" />
@@ -1016,7 +1016,7 @@ export const DashboardModule: React.FC = () => {
                   SL Le {(currentUser?.dailySalaryLe || 0).toLocaleString()}
                 </div>
                 <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
-                  Est. Accrued: <strong className="text-emerald-400">SL Le {((currentUser?.dailySalaryLe || 0) * attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved').length).toLocaleString()}</strong>
+                  Est. Accrued: <strong className="text-emerald-400">SL Le {((currentUser?.dailySalaryLe || 0) * attendance.filter((a) => a.userId === currentUser?.id && a.status === 'approved' && a.checkOutStatus === 'approved').length).toLocaleString()}</strong>
                 </span>
               </div>
               <div className="w-10 h-10 rounded-xl bg-indigo-950/80 text-indigo-400 border border-indigo-800/60 flex items-center justify-center shrink-0">
@@ -1686,14 +1686,24 @@ export const DashboardModule: React.FC = () => {
                           <td className="py-2.5 px-2 text-right">
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                att.status === 'approved'
+                                att.status === 'approved' && att.checkOutStatus === 'approved'
                                   ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                                  : att.status === 'rejected'
+                                  : att.status === 'rejected' || att.checkOutStatus === 'rejected'
                                   ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                                  : att.status === 'approved' && !att.checkOutTime
+                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
                                   : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
                               }`}
                             >
-                              {att.status.toUpperCase()}
+                              {att.status === 'approved' && att.checkOutStatus === 'approved' 
+                                ? 'APPROVED' 
+                                : att.status === 'rejected' || att.checkOutStatus === 'rejected'
+                                ? 'REJECTED'
+                                : att.status === 'approved' && !att.checkOutTime
+                                ? 'ACTIVE'
+                                : att.status === 'approved' && att.checkOutStatus === 'pending'
+                                ? 'PENDING OUT'
+                                : 'PENDING IN'}
                             </span>
                           </td>
                         </tr>

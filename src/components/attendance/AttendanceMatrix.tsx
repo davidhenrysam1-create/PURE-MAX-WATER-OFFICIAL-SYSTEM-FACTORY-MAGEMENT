@@ -29,11 +29,11 @@ export const AttendanceMatrix: React.FC<AttendanceMatrixProps> = ({ attendance, 
       const dayStatuses = daysArray.map(dayStr => {
         const record = attendance.find(a => a.userId === user.id && a.date === dayStr);
         if (!record) return null;
-        if (record.status === 'approved') {
+        if (record.status === 'approved' && record.checkOutStatus === 'approved') {
           approvedCount++;
           return '1';
         }
-        if (record.status === 'rejected') {
+        if (record.status === 'rejected' || record.checkOutStatus === 'rejected') {
           rejectedCount++;
           return '0';
         }
